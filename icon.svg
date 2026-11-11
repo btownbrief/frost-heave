@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2e5686"/><stop offset="1" stop-color="#0f1b2b"/></linearGradient>
+    <linearGradient id="snow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#b9d3ea"/></linearGradient>
+    <linearGradient id="cone" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffa347"/><stop offset=".4" stop-color="#ff7a14"/><stop offset="1" stop-color="#d44a00"/></linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <!-- 3x3 snowy tiles; the middle one is plowed open -->
+  <g transform="translate(76 76)">
+    <g fill="url(#snow)" stroke="#86a3c2" stroke-width="4">
+      <rect x="0" y="0" width="118" height="118" rx="22"/><rect x="128" y="0" width="118" height="118" rx="22"/><rect x="256" y="0" width="118" height="118" rx="22"/>
+      <rect x="0" y="128" width="118" height="118" rx="22"/><rect x="256" y="128" width="118" height="118" rx="22"/>
+      <rect x="0" y="256" width="118" height="118" rx="22"/><rect x="128" y="256" width="118" height="118" rx="22"/><rect x="256" y="256" width="118" height="118" rx="22"/>
+    </g>
+    <rect x="128" y="128" width="118" height="118" rx="22" fill="#3d3c45" stroke="#25242b" stroke-width="4"/>
+    <text x="187" y="217" font-family="Arial Rounded MT Bold, Trebuchet MS, Arial, sans-serif" font-weight="900" font-size="96" text-anchor="middle" fill="#6fc7ff" stroke="#0b0b10" stroke-width="8" paint-order="stroke">2</text>
+    <!-- cone on the top-right tile -->
+    <g transform="translate(262 -4)">
+      <ellipse cx="62" cy="108" rx="40" ry="9" fill="rgba(30,50,90,.35)"/>
+      <rect x="22" y="86" width="80" height="18" rx="6" fill="#2b2b33"/>
+      <path d="M52 16 H72 L98 90 H26 Z" fill="url(#cone)" stroke="#8a3200" stroke-width="4" stroke-linejoin="round"/>
+      <path d="M46 40 H78 L82 54 H42 Z M38 66 H86 L90 80 H34 Z" fill="#fff"/>
+    </g>
+    <!-- pothole on bottom-left tile hint -->
+    <ellipse cx="59" cy="315" rx="44" ry="30" fill="#cfe9f8" stroke="#6ea0c4" stroke-width="5"/>
+    <ellipse cx="59" cy="319" rx="30" ry="19" fill="#0c0c12"/>
+  </g>
+</svg>
