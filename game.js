@@ -4,8 +4,8 @@
   var E = window.FHEngine, Art = window.FHArt, Sfx = window.FHSfx;
   var $ = function (id) { return document.getElementById(id); };
   var TAU = Math.PI * 2;
-  var LONG_MS = 360, RING_DELAY = 170, REV_MS = 230;
-  var NUM_COLORS = [null, '#6fc7ff', '#ffe14d', '#ff9348', '#f08cff', '#ffffff', '#38e0c0', '#ff8fb8', '#c3c7d4'];
+  var LONG_MS = 420, RING_DELAY = 250, REV_MS = 230; // a release before RING_DELAY digs; between the two nothing happens (with a wobble); a full hold cones
+  var NUM_COLORS = [null, '#6fc7ff', '#ffe14d', '#ff6b6b', '#f08cff', '#ffffff', '#38e0c0', '#ff8fb8', '#c3c7d4'];
 
   // ---------- saves (always wrapped) ----------
   var store = {
@@ -31,7 +31,7 @@
   // ---------- game state ----------
   var lvl = null, W = 0, H = 0, N = 0, nbT = null;
   var board = null;                 // { mine, num }
-  var rv, revAt, flagAt, hazAt, wrongAt, nopeAt, dirX, dirY, rot, par, dist, bumpAt, dimA;
+  var rv, revAt, flagAt, hazAt, wrongAt, nopeAt, wobAt, slipAt, dirX, dirY, rot, par, dist, bumpAt, dimA;
   var status = 'title', prevStatus = 'ready', mode = 'dig';
   var flags = 0, revealed = 0, timeAcc = 0, tStart = 0, hinted = 0;
   var startIdx = -1, hitIdx = -1, dailyDate = null, lossT = 0, plowT = -1, plowMineList = [], plowNext = 0;
@@ -40,8 +40,7 @@
   var hintCells = null, hintFrom = null, hintUntil = 0;
   var shakeUntil = 0, shakeDur = 1, shakeAmp = 0;
   var pressIdx = -1, kbIdx = -1, kbActive = false;
-  var bank = [];
-  var lastResult = null, replay = false, run = null, patched = null;
+  var lastResult = null, replay = false, run = null, patched = null, storm = null, slipUsed = false, plowDur = 2200;
 
   // ---------- view ----------
   var dpr = 1, sw = 0, sh = 0, cs = 30, ox = 0, oy = 0, fitCs = 30, minCs = 20, maxCs = 60;
@@ -90,14 +89,21 @@
   }
   var shrinkT = 0;
 
+  // the board gets nearly all the space: a slim bed rim (0.35 of a square in all) instead of a puffy snowbank
+  function wFit() { return Math.min((sw - 12) / (W + 0.35), 54); }
+  function hFit() { return Math.min((sh - 12) / (H + 0.35), 54); }
+  var tallRoad = false, playCs = 30;
   function fitView(reset) {
     if (!lvl) return;
-    var f = Math.min((sw - 14) / (W + 1.3), (sh - 14) / (H + 1.15), 54);
-    fitCs = Math.max(10, f);
+    fitCs = Math.max(10, Math.min(wFit(), hFit()));
     minCs = fitCs;
-    maxCs = fitCs >= 44 ? fitCs : Math.max(64, fitCs * 1.5);
+    // a board too tall to show whole at a thumb-sized square (Hard, the weekend Daily, landscape phones) becomes a road
+    // you scroll up and down at the width-fit size; zooming out shows the whole road, zooming in stops at the width-fit
+    tallRoad = !lvl.storm && fitCs < (coarse ? 27 : 22) && wFit() > fitCs * 1.12; // Storm boards always fit whole
+    if (tallRoad) { playCs = Math.max(fitCs, Math.min(wFit(), coarse ? 40 : 34)); maxCs = playCs; }
+    else { playCs = fitCs; maxCs = fitCs >= 44 || lvl.storm ? fitCs : Math.max(64, fitCs * 1.5); }
     if (reset) {
-      cs = W >= 16 ? Math.max(fitCs, 30) : (coarse && fitCs < 23) ? Math.max(fitCs, 28) : fitCs;
+      cs = playCs;
       ox = (sw - W * cs) / 2; oy = (sh - H * cs) / 2;
     } else cs = clamp(cs, minCs, maxCs);
     clampView(); updateZoomBtn();
@@ -105,10 +111,10 @@
   function clampView() {
     var m = cs * 0.7;
     var bw = W * cs, bh = H * cs;
-    ox = bw + 2 * m <= sw ? (sw - bw) / 2 : clamp(ox, sw - bw - m, m);
-    oy = bh + 2 * m <= sh ? (sh - bh) / 2 : clamp(oy, sh - bh - m, m);
+    ox = bw <= sw + 0.5 ? (sw - bw) / 2 : clamp(ox, sw - bw - m, m);
+    oy = bh <= sh + 0.5 ? (sh - bh) / 2 : clamp(oy, sh - bh - m, m);
   }
-  function canPan() { var m = cs * 0.7; return W * cs + 2 * m > sw + 1 || H * cs + 2 * m > sh + 1; }
+  function canPan() { return W * cs > sw + 1 || H * cs > sh + 1; }
   function zoomTo(newCs, ax, ay) {
     newCs = clamp(newCs, minCs, maxCs);
     if (newCs === cs) return;
@@ -122,7 +128,7 @@
   }
   $('btnZoom').addEventListener('click', function () {
     Sfx.unlock(); Sfx.click();
-    var target = cs > fitCs * 1.08 ? fitCs : Math.max(fitCs * 1.55, 40);
+    var target = cs > fitCs * 1.08 ? fitCs : tallRoad ? playCs : Math.max(fitCs * 1.55, 40);
     animateZoom(target);
   });
   var zoomAnim = null, camAnim = null, lastViewMove = -1e9;
@@ -181,13 +187,44 @@
 
   // ---------- tips / toasts ----------
   var tipTimer = 0, toastTimer = 0;
+  // a tip never sits on squares: it goes in the gap above the board, or (when the board fills the stage) over the HUD row
+  // for at most 3 s, and the next touch on the board clears it
   function showTip(msg, ms) {
-    tipEl.textContent = msg; tipEl.classList.add('show');
+    tipEl.textContent = msg;
+    var inGame = lvl && status !== 'title', rim = Math.max(3, cs * 0.16);
+    tipEl.classList.remove('inhud', 'inrail'); tipEl.style.top = '0px'; tipEl.style.left = tipEl.style.width = '';
+    var hudEl = $('hud'), rail = getComputedStyle(hudEl).flexDirection === 'column';
+    if (rail) { // landscape phones: the HUD is a side rail, so the tip sits at the top of that rail
+      tipEl.classList.add('inrail'); tipEl.style.left = (hudEl.offsetLeft + 6) + 'px'; tipEl.style.width = (hudEl.offsetWidth - 12) + 'px';
+      tipEl.style.top = '6px'; tipEl.dataset.where = 'hud'; ms = Math.min(ms || 3000, 3000);
+    }
+    var h = tipEl.offsetHeight, spot = inGame ? noteSpot(h) : -1;
+    if (rail) { /* placed above */ }
+    else if (spot >= 0) { tipEl.style.top = spot + 'px'; tipEl.dataset.where = 'gap'; }
+    else { tipEl.classList.add('inhud'); tipEl.style.top = ($('chipMines').getBoundingClientRect().top - app.getBoundingClientRect().top) + 'px'; tipEl.dataset.where = 'hud'; ms = Math.min(ms || 3000, 3000); }
+    tipEl.classList.add('show');
     clearTimeout(tipTimer); tipTimer = setTimeout(function () { tipEl.classList.remove('show'); }, ms || 3800);
   }
-  function hideTip() { clearTimeout(tipTimer); tipEl.classList.remove('show'); }
+  function hideTip(instant) {
+    clearTimeout(tipTimer);
+    if (instant && tipEl.classList.contains('show')) { tipEl.style.transition = 'none'; tipEl.classList.remove('show'); void tipEl.offsetWidth; tipEl.style.transition = ''; }
+    tipEl.classList.remove('show');
+  }
+  // a free band of the stage above the board (below the Storm clock bar), else below it: top in #app px, or -1 when neither fits
+  function noteSpot(h) {
+    var rim = Math.max(3, cs * 0.16), above = oy - rim - 6, belowTop = oy + H * cs + rim + 4, below = sh - belowTop;
+    if (above >= h + 6) return stage.offsetTop + Math.max(2, (above - h) / 2);
+    if (below >= h + 6) return stage.offsetTop + belowTop + Math.max(2, (below - h) / 2);
+    return -1;
+  }
+  // toasts never cover the HUD (and so never the Storm clock) when the board leaves room above or below it
   function toast(msg, ms) {
-    toastEl.textContent = msg; toastEl.classList.add('show');
+    toastEl.textContent = msg; toastEl.style.top = toastEl.style.left = toastEl.style.width = ''; toastEl.classList.remove('inrail');
+    var hudEl = $('hud'), free = lvl && /^(ready|playing|sweep|won|lost)$/.test(status) && $('sheet').hidden;
+    if (free && getComputedStyle(hudEl).flexDirection === 'column') { // landscape phones: at the top of the HUD rail, off the board
+      toastEl.classList.add('inrail'); toastEl.style.left = (hudEl.offsetLeft + 6) + 'px'; toastEl.style.width = (hudEl.offsetWidth - 12) + 'px'; toastEl.style.top = '6px';
+    } else if (free) { var spot = noteSpot(toastEl.offsetHeight || 44); if (spot >= 0) toastEl.style.top = spot + 'px'; }
+    toastEl.classList.add('show');
     clearTimeout(toastTimer); toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, ms || 1800);
   }
   function markSeen(k) { if (!seen[k]) { seen[k] = 1; store.set('seen', seen); } }
@@ -201,14 +238,9 @@
 
   function allocState() {
     rv = new Uint8Array(N); revAt = new Float64Array(N); flagAt = new Float64Array(N); hazAt = new Float64Array(N);
-    wrongAt = new Float64Array(N); nopeAt = new Float64Array(N); dirX = new Float32Array(N); dirY = new Float32Array(N);
+    wrongAt = new Float64Array(N); nopeAt = new Float64Array(N); wobAt = new Float64Array(N); slipAt = new Float64Array(N); dirX = new Float32Array(N); dirY = new Float32Array(N);
     rot = new Float32Array(N); par = new Int16Array(N); dist = new Int16Array(N); bumpAt = new Float64Array(N); dimA = new Float32Array(N);
     var r = E.mulberry32(77); for (var i = 0; i < N; i++) rot[i] = (r() - 0.5) * 0.7;
-  }
-  function makeBank() {
-    bank = []; var r = E.mulberry32(5), g = -0.14, off = 0.3, gw = W + 0.28, gh = H + 0.28, x, y;
-    for (x = g - off; x <= g + gw + off; x += 0.4) { bank.push({ u: x, v: g - off * 0.55, r: 0.34 + r() * 0.14 }); bank.push({ u: x, v: g + gh + off * 0.55, r: 0.34 + r() * 0.14 }); }
-    for (y = g + 0.2; y < g + gh; y += 0.4) { bank.push({ u: g - off * 0.55, v: y, r: 0.34 + r() * 0.14 }); bank.push({ u: g + gw + off * 0.55, v: y, r: 0.34 + r() * 0.14 }); }
   }
 
   function startGame(key, opts) {
@@ -218,12 +250,15 @@
     if (key === 'run') {
       if (!opts.cont || !run) run = { stage: 1, hp: 10, maxHp: 10, xp: 0, level: 1, dug: 0, hits: 0, startBest: best.run || 0, startBestScore: best.runScore || 0, stakes: 2, perks: {}, taken: [], cones: 0 };
       var sp = FHRun.stageSpec(run.stage); run.axleLeft = run.perks.axle || 0; run.stageHits = 0; run.steady = 0; run.steadyPaid = 0; base = { name: 'Pothole Run', w: sp.w, h: sp.h, mines: sp.hazards };
+    } else if (key === 'storm') {
+      if (!opts.cont || !storm) storm = { stage: 1, bank: STORM_START, dug: 0, cleared: 0, hits: 0, startBest: best.storm || 0, startBestStage: best.stormStage || 0, lastTick: -1 };
+      var ss = E.stormSpec(storm.stage); base = { name: 'Storm Shift', w: ss.w, h: ss.h, mines: ss.mines, maxOpen: ss.maxOpen };
     } else base = key === 'daily' ? (isWeekend() ? E.LEVELS.hard : E.LEVELS.medium) : E.LEVELS[key];
-    lvl = { key: key, name: key === 'daily' ? 'Daily Road' : base.name, w: base.w, h: base.h, mines: base.mines, daily: key === 'daily', run: key === 'run' };
+    lvl = { key: key, name: key === 'daily' ? 'Daily Road' : base.name, w: base.w, h: base.h, mines: base.mines, daily: key === 'daily', run: key === 'run', storm: key === 'storm' };
     if (lvl.run) lvl.spec = FHRun.stageSpec(run.stage);
     W = lvl.w; H = lvl.h; N = W * H; nbT = E.topo(W, H).nb;
-    allocState(); makeBank(); patched = new Uint8Array(N); surveyed = new Uint8Array(N); setProbe(false);
-    board = null; replay = false; startIdx = -1; hitIdx = -1; flags = 0; revealed = 0; timeAcc = 0; tStart = 0; hinted = 0; chain = 0; plowT = -1;
+    allocState(); patched = new Uint8Array(N); surveyed = new Uint8Array(N); setProbe(false);
+    board = null; replay = false; startIdx = -1; hitIdx = -1; flags = 0; revealed = 0; timeAcc = 0; tStart = 0; hinted = 0; chain = 0; plowT = -1; slipUsed = false; plowDur = 2200;
     events = []; particles = []; texts = []; hintCells = null; lossT = 0; shakeUntil = 0; lastTapIdx = -1; kbIdx = -1; camAnim = null; stamp = null; fling = null;
     status = 'ready'; safeCount = N - lvl.mines; resetHudBits();
     if (opts.seed !== undefined) lvl.seed = opts.seed;
@@ -233,10 +268,15 @@
       var sx = 1 + Math.floor(rng() * (W - 2)), sy = 1 + Math.floor(rng() * (H - 2));
       startIdx = sy * W + sx;
       board = E.generate(W, H, lvl.mines, startIdx, rng, { maxOpen: base.maxOpen });
+    } else if (lvl.storm) { // every stretch arrives with its start area already open, so the clock never waits on a blind tap
+      if (opts.seed !== undefined) storm.rng = E.mulberry32(opts.seed); else if (!opts.cont) storm.rng = null;
+      var srng = storm.rng || E.mulberry32((Math.random() * 4294967296) >>> 0);
+      startIdx = (1 + Math.floor(srng() * (H - 2))) * W + 1 + Math.floor(srng() * (W - 2));
+      board = E.generate(W, H, lvl.mines, startIdx, srng, { maxOpen: base.maxOpen }); lvl.mines = board.mines; safeCount = N - board.mines;
     } else if (opts.seed !== undefined) {
       lvl.rng = E.mulberry32(opts.seed);
     }
-    document.body.dataset.level = key; document.body.classList.toggle('isrun', !!lvl.run);
+    document.body.dataset.level = key; document.body.classList.toggle('isrun', !!lvl.run); document.body.classList.toggle('isstorm', !!lvl.storm);
     if (lvl.run && !seen.run) { markSeen('run'); $('runhelp').hidden = false; }
     if (lvl.run && opts.cont && FHRun.hitExtra(run.stage) > FHRun.hitExtra(run.stage - 1)) {
       at(now() + 700, function () { showTip('The ice is meaner from here: every hit costs ' + FHRun.hitExtra(run.stage) + ' extra HP.', 4600); });
@@ -251,10 +291,19 @@
     if (board && canPan()) { // big daily road: start with the pre-opened area in view
       ox = sw / 2 - ((startIdx % W) + 0.5) * cs; oy = sh / 2 - (Math.floor(startIdx / W) + 0.5) * cs; clampView();
     }
-    if (board) { at(now() + 380, function () { openFrom([startIdx], now(), false); lastTapIdx = startIdx; }); }
+    if (lvl.storm) {
+      var oyT = oy, b0 = board, inMs = opts.cont ? 340 : 380; inputLockUntil = now() + inMs; // no taps while the board slides in
+      if (opts.cont) { drawSceneBg(); oy = oyT + sh * 0.85; animateCam(cs, ox, oyT, 320); } // horizon set from where the board lands
+      at(now() + inMs, function () {
+        if (board !== b0 || status !== 'ready') return;
+        openFrom([startIdx], now(), false); lastTapIdx = startIdx; beginPlay();
+        if (!seen.first) positionGhost();
+      });
+      if (!seen.storm) { markSeen('storm'); at(now() + 700, function () { showTip('Beat the clock! Every cleared board adds time.', 3000); }); }
+    } else if (board) { inputLockUntil = now() + 380; at(now() + 380, function () { openFrom([startIdx], now(), false); lastTapIdx = startIdx; }); }
     lastViewMove = -1e9;
-    if (W >= 16 && !seen.hardtip) { markSeen('hardtip'); at(now() + 900, function () { showTip('Big road! Drag to pan, pinch to zoom. Dragging never digs.', 4200); }); }
-    if (!seen.first && !lvl.run) {
+    if (tallRoad && !seen.tallroad) { markSeen('tallroad'); at(now() + 900, function () { showTip('A long road! Drag up and down to scroll. Dragging never digs.', 3000); }); }
+    if (!seen.first && !lvl.run && !lvl.storm) {
       if (board) at(now() + 1000, function () { if (status === 'ready') positionGhost(); }); else positionGhost();
       showTip(board ? 'The road is open here. Tap a square next!' : 'Tap any square. Your first tap is always safe.', 5000);
     }
@@ -265,17 +314,18 @@
   function restartSame() {
     if (!lvl) return;
     if (lvl.run) { startGame('run'); return; }
+    if (lvl.storm) { startGame('storm'); return; }
     var key = lvl.key, had = board, st = startIdx, keepBoard = had, status0 = status, hadHazardsShown = hitIdx >= 0, revealed0 = revealed;
     Sfx.click();
     allocState();
     flags = 0; revealed = 0; timeAcc = 0; tStart = 0; hinted = 0; chain = 0; plowT = -1; hitIdx = -1; lossT = 0;
-    events = []; particles = []; texts = []; hintCells = null; shakeUntil = 0; status = 'ready'; safeCount = N - lvl.mines; camAnim = null; stamp = null; fitView(true);
+    events = []; particles = []; texts = []; hintCells = null; shakeUntil = 0; status = 'ready'; safeCount = N - lvl.mines; camAnim = null; stamp = null; slipUsed = false; fitView(true);
     board = keepBoard; startIdx = st; replay = !!keepBoard && (status0 === 'lost' || status0 === 'won' || hadHazardsShown || revealed0 > 0 || replay);
     if (!lvl.daily && board) { /* same road: first tap area opens again */ }
     hideScreens(); resetHudBits(); updateHud(); setHintBtn(); setMode('dig');
     if (board) at(now() + 250, function () { openFrom([startIdx], now(), false); });
   }
-  function resetHudBits() { $('txtTime').textContent = '0:00'; lastHudSec = -1; hideTip(); toastEl.classList.remove('show'); $('btnHint').classList.remove('has'); }
+  function resetHudBits() { $('txtTime').textContent = lvl && lvl.storm ? fmt(Math.ceil(storm.bank / 1000) * 1000) : '0:00'; lastHudSec = -1; $('chipTime').classList.remove('warn'); $('timeFlash').classList.remove('show'); hideTip(); toastEl.classList.remove('show'); $('btnHint').classList.remove('has'); }
   function newRoad() { startGame(lvl.key); }
 
   function generateFor(i) {
@@ -291,7 +341,7 @@
 
   // ---------- core actions ----------
   function beginPlay() {
-    if (status === 'ready') { status = 'playing'; tStart = now(); if (!lvl.run || run.stage === 1) { stats.plays++; store.set('stats', stats); } hideGhost(); }
+    if (status === 'ready') { status = 'playing'; tStart = now(); if ((!lvl.run || run.stage === 1) && (!lvl.storm || storm.stage === 1)) { stats.plays++; store.set('stats', stats); } hideGhost(); }
   }
   function openFrom(starts, t0, user) {
     var q = [], s, i, j;
@@ -308,17 +358,14 @@
       var cc = q[i]; revAt[cc] = t0 + dist[cc] * step + ((cc * 7) % 5);
       if (par[cc] >= 0) { var dx = (cc % W) - (par[cc] % W), dy = Math.floor(cc / W) - Math.floor(par[cc] / W); var len = Math.hypot(dx, dy) || 1; dirX[cc] = dx / len; dirY[cc] = dy / len; }
       else { dirX[cc] = (rot[cc] > 0 ? 1 : -1) * 0.6; dirY[cc] = -0.8; }
-      (function (idx) { at(revAt[idx] + 30, function () { puff(idx, big ? 2 : 4); }); })(cc);
+      if (!big || i % 2 === 0) (function (idx) { at(revAt[idx] + 30, function () { puff(idx, big ? 1 : 2); }); })(cc);
     }
     revealed += q.length;
-    if (user && q.length >= 8) {
-      // pop-up floats from the middle of the opened patch, bigger for bigger opens
-      var mx = 0, my = 0; for (i = 0; i < q.length; i++) { mx += q[i] % W; my += Math.floor(q[i] / W); }
-      mx = mx / q.length + 0.5; my = my / q.length + 0.5;
-      var popT = t0 + Math.min(650, maxd * step) * 0.45, sz = 0.85 + Math.min(1, q.length / 70) * 0.75;
-      var word = q.length >= 40 ? BIG_WORDS[(q.length + revealed) % BIG_WORDS.length] : null;
-      at(popT, function () { texts.push({ txt: '+' + q.length, bx: mx, by: my, t0: now(), sz: sz, sub: word }); });
-      if (q.length >= 40) { at(popT, function () { shake(3, 200); Sfx.whoosh(q.length); }); }
+    if (user && q.length >= 12) {
+      // a plain "+N" in the gap above the board (never over live numbers); a big open also gets a soft whoosh
+      var mx = 0; for (i = 0; i < q.length; i++) mx += q[i] % W; mx = mx / q.length + 0.5;
+      var popT = t0 + Math.min(650, maxd * step) * 0.35;
+      at(popT, function () { texts.push({ txt: '+' + q.length, gx: mx, t0: now() }); if (q.length >= 40) Sfx.whoosh(q.length); });
     }
     if (user) {
       if (maxd === 0) { Sfx.reveal(chain); at(t0, function () { }); }
@@ -342,7 +389,7 @@
     beginPlay();
     if (t - lastRevealT > 2500) chain = 0; else chain++;
     lastRevealT = t;
-    if (board.mine[i]) { if (lvl.run) runHit(i); else lose(i); return; }
+    if (board.mine[i]) { hazardHit(i); return; }
     var first = revealed === 0;
     var gained = openFrom([i], t, true);
     if (lvl.run && run.perks.steady && !run.steadyPaid) { run.steady = (run.steady || 0) + gained; if (run.steady >= 25 && run.stageHits === 0) { run.steadyPaid = 1; if (run.stakes < FHRun.STAKE_CAP) { run.stakes++; setHintBtn(); updateHud(); toast('Steady Hands: +1 stake'); Sfx.hint(); } } }
@@ -371,10 +418,30 @@
       Sfx.whoosh(20); toast('Road Salt: +' + pick.length + ' squares'); afterOpen(g);
     });
   }
+  // a dug hazard: Run loses HP, Storm Shift loses time, Classic/Daily forgive the first slip and end on the second
+  function hazardHit(i) {
+    if (lvl.run) runHit(i);
+    else if (lvl.storm) stormHit(i);
+    else if (!slipUsed) slip(i);
+    else lose(i);
+  }
+  function markHazardCone(i, t) { rv[i] = 2; flags++; flagAt[i] = t + 120; slipAt[i] = t; bumpAt[i] = t; crumble(i); }
+  function slip(i) {
+    var t = now(); slipUsed = true; markHazardCone(i, t);
+    timeAcc += SLIP_MS; lastHudSec = -1; updateTimer();
+    flashChip('Slip! +' + SLIP_MS / 1000 + 's', 'bad'); shake(3, 200); Sfx.slip(); buzz([30, 30, 40]);
+    updateHud(); pulseMines();
+    if (!seen.slip) { markSeen('slip'); at(t + 500, function () { if (status === 'playing') showTip('One slip is forgiven on every road (+20 s). The next one ends it.', 3000); }); }
+  }
+  function flashChip(txt, kind) {
+    var el = $('timeFlash'); el.textContent = txt; el.className = kind; void el.offsetWidth; el.classList.add('show');
+    clearTimeout(flashChip.t); flashChip.t = setTimeout(function () { el.classList.remove('show'); }, 1500);
+  }
   function afterOpen(gained) {
     if (lvl.run && gained) { run.dug += gained; gainXp(gained); }
+    if (lvl.storm && gained) storm.dug += gained;
     if (!seen.first && !lvl.run) { markSeen('first'); at(now() + 500, function () { if (status === 'playing') showTip('Numbers count the hazards touching a square. Hold a square to plant a cone.', 5200); }); }
-    if (revealed >= safeCount) { if (lvl.run) runClear(); else win(); }
+    if (revealed >= safeCount && status === 'playing') { if (lvl.run) runClear(); else if (lvl.storm) stormClear(); else win(); }
   }
 
   function actFlag(i) {
@@ -416,10 +483,10 @@
     lastRevealT = t;
     var safe = [], hit = -1;
     for (j = 0; j < hidden.length; j++) { if (board.mine[hidden[j]]) { if (hit < 0) hit = hidden[j]; } else safe.push(hidden[j]); }
-    if (safe.length) openFrom(safe, t, true);
+    var gotN = safe.length ? openFrom(safe, t, true) : 0;
     Sfx.chord();
-    if (hit >= 0) { lose(hit); return; }
-    afterOpen();
+    if (hit >= 0) { if (gotN && lvl.storm) storm.dug += gotN; hazardHit(hit); if (status === 'playing' && revealed >= safeCount) afterOpen(0); return; }
+    afterOpen(gotN);
   }
 
   function autoCone(from, list, t) {
@@ -438,7 +505,9 @@
   var PAR = { easy: [30e3, 60e3], medium: [120e3, 240e3], hard: [270e3, 480e3], daily: [120e3, 240e3] };
   var MEDAL_NAMES = ['bronze', 'silver', 'gold'];
   var medals = store.get('medals', {});
-  function medalFor(key, ms, clean) { var p = PAR[key === 'daily' && W >= 16 ? 'hard' : key]; if (!p) return -1; if (!clean) return 0; return ms <= p[0] ? 2 : ms <= p[1] ? 1 : 0; }
+  // Hard changed size (16x28 -> 12x32) on Nov 15, so its best time and medal start fresh under a new key
+  function bestKey(k) { k = k || lvl.key; return k === 'hard' ? 'hard12' : k; }
+  function medalFor(key, ms, clean) { var p = PAR[key === 'daily' && H >= 28 ? 'hard' : key]; if (!p) return -1; if (!clean) return 0; return ms <= p[0] ? 2 : ms <= p[1] ? 1 : 0; }
 
   // ---------- lose / win ----------
   var LOSE_TITLES = ['Heaved!', 'Pothole!', 'Axle crack!', 'Frost got you', 'Whoa, bump!'];
@@ -466,7 +535,7 @@
     status = 'won'; timeAcc += now() - tStart; hideTip();
     var ms = Math.round(timeAcc), rec = false, i;
     stats.wins++; store.set('stats', stats);
-    var bkey = lvl.key, firstClear = !best[bkey] && !hinted && !replay && !lvl.daily;
+    var bkey = bestKey(), firstClear = !best[bkey] && !hinted && !replay && !lvl.daily;
     if (!hinted && !replay && (!best[bkey] || ms < best[bkey])) { rec = !!best[bkey]; best[bkey] = ms; store.set('best', best); }
     var streakNow = 0;
     if (lvl.daily) {
@@ -481,8 +550,8 @@
       if (!hinted && !replay && (!dailyRec.times[d] || ms < dailyRec.times[d])) dailyRec.times[d] = ms;
       store.set('daily', dailyRec); streakNow = dailyRec.streak;
     }
-    var medal = medalFor(lvl.key, ms, !hinted && !replay), prevMedal = medals[lvl.key] === undefined ? -1 : medals[lvl.key];
-    if (medal > prevMedal) { medals[lvl.key] = medal; store.set('medals', medals); }
+    var mkey = bestKey(), medal = medalFor(lvl.key, ms, !hinted && !replay), prevMedal = medals[mkey] === undefined ? -1 : medals[mkey];
+    if (medal > prevMedal) { medals[mkey] = medal; store.set('medals', medals); }
     lastResult = { win: true, ms: ms, rec: rec && !hinted && !replay, first: firstClear, streak: streakNow, medal: medal, medalUp: medal > prevMedal && prevMedal >= 0 };
     plowMineList = [];
     for (i = 0; i < N; i++) if (board.mine[i] && rv[i] !== 2) plowMineList.push(i);
@@ -496,14 +565,14 @@
   }
   // ease the camera out so the whole finished road is on screen; returns how long that takes
   function showWholeRoad() {
-    var f = Math.min((sw - 14) / (W + 1.3), (sh - 14) / (H + 1.15), 54);
+    var f = Math.max(10, Math.min(wFit(), hFit()));
     var tox = (sw - W * f) / 2, toy = (sh - H * f) / 2;
     if (Math.abs(cs - f) < 0.5 && Math.abs(ox - tox) < 2 && Math.abs(oy - toy) < 2) return 0;
     animateCam(f, tox, toy, 520); return 560;
   }
   // confetti + "ROAD OPEN!" stamp as the plow finishes
   var stamp = null;
-  var CONF = ['255,138,36', '255,216,74', '255,255,255', '143,208,255', '125,255,176'];
+  var CONF = ['255,255,255', '169,220,245', '255,138,36']; // snow, ice, cone: the game's own colours, not a party mix
   function celebrate(t0, delay) {
     at(t0 + (delay || 1500), function () {
       if (status !== 'won') return;
@@ -516,6 +585,56 @@
                r: 3.5 + Math.random() * 3.5, c: CONF[k % CONF.length], sq: 1, rot: Math.random() * TAU, vr: (Math.random() - 0.5) * 14 });
       }
     });
+  }
+
+  // ---------- Storm Shift: small no-guess boards against one clock ----------
+  var STORM_START = 40000, STORM_CAP = 60000, STORM_PER = 1.6, STORM_DECAY = 0.85, STORM_HIT = 10000, STORM_HINT = 8000, SLIP_MS = 20000;
+  function stormLeft() { return storm ? storm.bank - elapsed() : 0; }
+  // clearing a board adds 1.6 s per hazard on stretch 1, and the rate shrinks 15% every stretch (S1 +11, S3 +15, S5 +18, S7 +18,
+  // S10 +13, S13 +8), never past 60 s on the clock: boards get bigger while the reward fades, so every run ends. Tuned by bot play, see UPGRADE notes.
+  function stormBonus(stage, mines) { return Math.max(2, Math.round(STORM_PER * mines * Math.pow(STORM_DECAY, stage - 1))) * 1000; }
+  function stormScore() { return storm.dug + 50 * storm.cleared; }
+  function stormHit(i) {
+    var t = now(); markHazardCone(i, t);
+    storm.bank -= STORM_HIT; storm.hits++;
+    flashChip('-' + STORM_HIT / 1000 + 's', 'bad'); shake(3, 200); Sfx.slip(); buzz([30, 30, 40]);
+    lastHudSec = -1; updateHud(); updateTimer(); pulseMines();
+  }
+  function stormClear() {
+    status = 'sweep'; timeAcc += now() - tStart; hideTip(true); hideGhost(); cancelPress();
+    var bonus = stormBonus(storm.stage, lvl.mines), leftNow = Math.max(0, storm.bank - timeAcc);
+    // the clock never holds more than 60 s, so a quick player cannot bank a cushion for later boards
+    storm.bank = Math.min(STORM_CAP, leftNow + bonus); bonus = storm.bank - leftNow; storm.cleared++; storm.stage++;
+    storm.refill = { from: leftNow, t: now() };
+    hintCells = null; $('btnHint').classList.remove('has');
+    if (stormScore() > (best.storm || 0)) best.storm = stormScore();
+    if (storm.cleared > (best.stormStage || 0)) best.stormStage = storm.cleared;
+    store.set('best', best);
+    timeAcc = 0; lastHudSec = -1; $('txtTime').textContent = fmt(Math.ceil(storm.bank / 1000) * 1000);
+    flashChip('+' + Math.max(0, Math.round(bonus / 1000)) + 's', 'good');
+    $('chipTime').classList.remove('warn');
+    plowMineList = []; for (var q = 0; q < N; q++) if (board.mine[q] && rv[q] !== 2) plowMineList.push(q);
+    plowMineList.sort(function (a, b) { return Math.floor(b / W) - Math.floor(a / W); });
+    plowNext = 0; plowRow = -1; plowDur = 520; plowT = now();
+    Sfx.chord(); Sfx.sweep(); buzz([15, 30, 25]); updateHud();
+    var b0 = board;
+    at(plowT + plowDur, function () { if (board === b0 && status === 'sweep') animateCam(cs, ox, oy - sh * 0.9, 240); });
+    at(plowT + plowDur + 250, function () { if (board === b0 && status === 'sweep') startGame('storm', { cont: true }); });
+  }
+  function stormOver() {
+    if (status !== 'playing') return;
+    status = 'lost'; timeAcc += now() - tStart; storm.bank = timeAcc; lossT = now(); hideTip(); hideGhost(); cancelPress();
+    $('txtTime').textContent = '0:00'; $('chipTime').classList.add('warn');
+    var cx = W / 2, cy = H / 2, list = [], i;
+    for (i = 0; i < N; i++) if (board.mine[i] && rv[i] !== 2) { hazAt[i] = lossT + 120 + Math.hypot(i % W - cx, Math.floor(i / W) - cy) * 40; list.push(i); }
+    list.forEach(function (idx) { at(hazAt[idx], function () { crumble(idx); }); });
+    var sc = stormScore();
+    if (sc > (best.storm || 0)) best.storm = sc;
+    if (storm.cleared > (best.stormStage || 0)) best.stormStage = storm.cleared;
+    store.set('best', best);
+    Sfx.lose(); Sfx.duck(3000); buzz([40, 30, 80]);
+    at(lossT + 1300, function () { if (status === 'lost') showResult(false); });
+    updateHud();
   }
 
   // ---------- Pothole Run ----------
@@ -597,6 +716,7 @@
     var h = E.hint(W, H, view, board.num);
     if (!h) { showTip('No sure move found. Check your cones for a mistake!', 3000); return; }
     hinted++;
+    if (lvl.storm) { storm.bank -= STORM_HINT; flashChip('-' + STORM_HINT / 1000 + 's', 'bad'); lastHudSec = -1; updateTimer(); }
     hintCells = h.cells; hintFrom = h.from || []; hintUntil = now() + 4500;
     Sfx.hint(); buzz(10);
     var flaggedSafe = h.kind === 'safe' && h.cells.some(function (c) { return rv[c] === 2; });
@@ -685,7 +805,7 @@
     var c = cellCenter(i);
     for (var k = 0; k < n; k++) {
       var a = Math.random() * TAU, sp = cs * (0.4 + Math.random() * 1.1);
-      addP({ x: c.x, y: c.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - cs * 0.3, g: cs * 1.6, life: 0, max: 0.45 + Math.random() * 0.3, r: cs * (0.05 + Math.random() * 0.07), c: '255,255,255', rel: 1 });
+      addP({ x: c.x, y: c.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - cs * 0.3, g: cs * 1.6, life: 0, max: 0.16 + Math.random() * 0.09, r: cs * (0.04 + Math.random() * 0.05), c: '255,255,255', rel: 1 });
     }
   }
   function puffSmall(i) {
@@ -696,7 +816,6 @@
     var c = cellCenter(i);
     for (var k = 0; k < 9; k++) { var a = Math.random() * TAU, sp = cs * (0.6 + Math.random() * 1.4); addP({ x: c.x, y: c.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - cs * 0.8, g: cs * 3, life: 0, max: 0.5 + Math.random() * 0.3, r: cs * (0.04 + Math.random() * 0.05), c: k % 3 ? '230,245,255' : '40,40,48', rel: 1 }); }
   }
-  var BIG_WORDS = ['Nice!', 'Wicked!', 'Plowed!', 'Sweet!', 'Clear!'];
   function popText(txt, idx, t0, col) {
     at(t0 + 60, function () { var c = cellCenter(idx); texts.push({ txt: txt, x: c.x, y: c.y, t0: now(), col: col }); });
   }
@@ -707,7 +826,8 @@
   function pathRR(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
 
   function drawRoad(c) {
-    var x0 = ox - cs * 0.1, rw = W * cs + cs * 0.2, top = oy - cs * 0.4, bot = oy + H * cs + cs * 0.4;
+    if (camAnim && lvl.storm) return; // boards sliding between stretches: no road stretching after them
+    var x0 = ox - cs * 0.1, rw = W * cs + cs * 0.2, top = oy - cs * 0.4;
     var hz = sceneHy - stage.getBoundingClientRect().top, vx = x0 + rw / 2, far = rw * 0.08;
     if (top > hz + 2) {
       var g1 = c.createLinearGradient(0, hz, 0, top); g1.addColorStop(0, 'rgba(120,140,170,.05)'); g1.addColorStop(1, 'rgba(120,140,170,.42)');
@@ -715,20 +835,24 @@
       c.strokeStyle = 'rgba(30,45,70,.4)'; c.lineWidth = Math.max(2, cs * 0.16);
       [0.3, 0.7].forEach(function (k) { c.beginPath(); c.moveTo(vx + (k - 0.5) * far * 2, hz); c.lineTo(x0 + rw * k, top); c.stroke(); });
     }
-    if (bot < sh) {
-      var g2 = c.createLinearGradient(0, bot, 0, sh); g2.addColorStop(0, 'rgba(120,140,170,.38)'); g2.addColorStop(1, 'rgba(120,140,170,.05)');
-      c.fillStyle = g2; c.fillRect(x0, bot, rw, sh - bot);
-    }
-    c.strokeStyle = 'rgba(30,45,70,.35)'; c.lineWidth = Math.max(3, cs * 0.28); c.setLineDash([cs * 0.5, cs * 0.18]);
-    [0.3, 0.7].forEach(function (k) { var tx = x0 + rw * k; c.beginPath(); if (bot < sh) { c.moveTo(tx, bot); c.lineTo(tx, sh); } c.stroke(); });
-    c.setLineDash([]);
+    // nothing below the board: the old faded road there read as a drawing glitch
   }
-  function drawFrame(c) {
-    var i, b, x, y;
+  // a calm rim: a dark rounded bed about 5 px wide and one thin snow lip along the top edge.
+  // In Storm Shift the lip is the clock: its length is the time left (full at 60 s), white, then amber under 20 s, red under 10 s
+  function drawFrame(c, t) {
     drawRoad(c);
-    for (i = 0; i < bank.length; i++) { b = bank[i]; x = ox + b.u * cs; y = oy + b.v * cs; if (x < -cs || y < -cs || x > sw + cs || y > sh + cs) continue; c.drawImage(spr.blobShadow, x - b.r * cs * 1.1, y + cs * 0.1 - b.r * cs * 1.1, b.r * cs * 2.2, b.r * cs * 2.2); }
-    for (i = 0; i < bank.length; i++) { b = bank[i]; x = ox + b.u * cs; y = oy + b.v * cs; if (x < -cs || y < -cs || x > sw + cs || y > sh + cs) continue; c.drawImage(spr.blob, x - b.r * cs, y - b.r * cs, b.r * cs * 2, b.r * cs * 2); }
-    c.fillStyle = '#25242b'; pathRR(c, ox - cs * 0.14, oy - cs * 0.14, W * cs + cs * 0.28, H * cs + cs * 0.28, cs * 0.2); c.fill();
+    var r = Math.max(3, cs * 0.16), bx = ox - r, by = oy - r, bw = W * cs + r * 2, bh = H * cs + r * 2;
+    c.fillStyle = 'rgba(0,0,0,.28)'; pathRR(c, bx, by + 3, bw, bh, 10); c.fill();
+    c.fillStyle = '#1b1d26'; pathRR(c, bx, by, bw, bh, 10); c.fill();
+    if (lvl.storm && storm) {
+      var left = Math.max(0, stormLeft()), rf = storm.refill;
+      if (rf && t - rf.t < 400) { var rk = clamp((t - rf.t) / 400, 0, 1); left = rf.from + (left - rf.from) * (1 - Math.pow(1 - rk, 3)); }
+      var low = left < 10000 && status === 'playing', pk = storm.pulseAt ? (t - storm.pulseAt) / 600 : 1;
+      if (low && pk < 1) { c.strokeStyle = 'rgba(255,93,108,' + (0.9 * (1 - pk)) + ')'; c.lineWidth = 3; pathRR(c, bx - 1, by - 1, bw + 2, bh + 2, 11); c.stroke(); }
+      var full = bw - 12, len = full * clamp(left / STORM_CAP, 0, 1);
+      c.fillStyle = 'rgba(234,242,250,.12)'; pathRR(c, bx + 6, by - 2, full, 5, 2.5); c.fill();
+      if (len > 0.5) { c.fillStyle = left > 20000 ? '#eaf2fa' : left > 10000 ? '#ffb347' : '#ff5d6c'; pathRR(c, bx + 6, by - 2, Math.max(len, 5), 5, 2.5); c.fill(); }
+    } else if (by > -4) { c.fillStyle = '#eaf2fa'; pathRR(c, bx + 6, by - 1, bw - 12, 3, 1.5); c.fill(); }
   }
 
   function drawSnow(c, i, px, py, v) { c.drawImage(spr.snow[(i * 7 + (i >> 2)) & 3], px, py, cs, cs); }
@@ -739,6 +863,7 @@
     var wrong = wrongAt[i] > 0 && t >= wrongAt[i];
     // nope wiggle
     var wig = 0; if (nopeAt[i] && t - nopeAt[i] < 320) wig = Math.sin((t - nopeAt[i]) / 320 * TAU * 2.5) * cs * 0.06 * (1 - (t - nopeAt[i]) / 320);
+    if (wobAt[i] && t - wobAt[i] < 120) wig += Math.sin((t - wobAt[i]) / 120 * TAU * 1.5) * 2 * (1 - (t - wobAt[i]) / 120); // a hold let go early
     px += wig;
     if (s === 1) {
       var ra = revAt[i];
@@ -794,9 +919,12 @@
       }
     } else {
       var pressed = (i === pressIdx);
-      if (pressed && status !== 'lost') {
-        c.save(); c.translate(px + cs / 2, py + cs / 2); c.scale(0.93, 0.93); c.drawImage(spr.snow[(i * 7 + (i >> 2)) & 3], -cs / 2, -cs / 2, cs, cs); c.restore();
-        c.fillStyle = 'rgba(120,190,255,.30)'; pathRR(c, px + cs * 0.06, py + cs * 0.06, cs * 0.88, cs * 0.88, cs * 0.14); c.fill();
+      if (s === 2 && slipAt[i]) { // a dug hazard you survived: it stays visible, with a cone on it
+        c.drawImage((i & 1) ? spr.heave[(i >> 1) & 1] : spr.pothole[(i >> 1) & 1], px, py, cs, cs);
+        c.strokeStyle = 'rgba(255,107,107,.85)'; c.lineWidth = Math.max(1.5, cs * 0.06); pathRR(c, px + 1.5, py + 1.5, cs - 3, cs - 3, cs * 0.14); c.stroke();
+      } else if (pressed && status !== 'lost') { // the finger's square drops 2 px and dims, so you always see which square you have
+        drawSnow(c, i, px, py + 2);
+        c.fillStyle = 'rgba(16,28,48,.12)'; pathRR(c, px + cs * 0.035, py + 2 + cs * 0.035, cs * 0.93, cs * 0.93, cs * 0.16); c.fill();
       } else drawSnow(c, i, px, py);
       if (s === 2 && t >= flagAt[i]) {
         var fp = clamp((t - flagAt[i]) / 260, 0, 1), sc2 = fp < 1 ? 0.35 + 0.65 * easeOutBack(fp) : 1, yoff = fp < 1 ? -(1 - fp) * cs * 0.35 : 0;
@@ -834,14 +962,14 @@
     c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, sw, sh);
     if (t < shakeUntil) { var k = (shakeUntil - t) / shakeDur; sx = (Math.random() - 0.5) * 2 * shakeAmp * k; sy = (Math.random() - 0.5) * 2 * shakeAmp * k; }
     c.translate(sx, sy);
-    drawFrame(c);
+    drawFrame(c, t);
     var x0 = Math.max(0, Math.floor(-ox / cs)), x1 = Math.min(W - 1, Math.floor((sw - ox) / cs));
     var y0 = Math.max(0, Math.floor(-oy / cs)), y1 = Math.min(H - 1, Math.floor((sh - oy) / cs));
     var x, y;
     for (y = y0; y <= y1; y++) for (x = x0; x <= x1; x++) drawCell(c, y * W + x, x, y, t);
     var bcx = ox + W * cs * 0.38, bcy = oy + H * cs * 0.3, br = Math.max(W, H) * cs * 0.85;
     var lg = c.createRadialGradient(bcx, bcy, br * 0.15, bcx, bcy, br);
-    lg.addColorStop(0, 'rgba(200,225,255,.07)'); lg.addColorStop(0.6, 'rgba(10,18,40,0)'); lg.addColorStop(1, 'rgba(10,18,40,.22)');
+    lg.addColorStop(0, 'rgba(200,225,255,.07)'); lg.addColorStop(0.6, 'rgba(10,18,40,0)'); lg.addColorStop(1, 'rgba(10,18,40,.1)');
     c.fillStyle = lg; c.fillRect(Math.max(ox, 0), Math.max(oy, 0), Math.min(W * cs, sw), Math.min(H * cs, sh));
 
     // hint glow
@@ -864,18 +992,15 @@
     // long-press ring
     if (gesture && gesture.kind === 'press' && gesture.timerOn && gesture.idx >= 0 && rv[gesture.idx] !== 1) {
       var pr = (t - gesture.t0 - RING_DELAY) / (LONG_MS - RING_DELAY);
-      if (pr > 0) {
-        var cc = cellCenter(gesture.idx), rad = cs * 0.62;
-        c.save(); c.lineCap = 'round';
-        c.fillStyle = 'rgba(10,20,34,' + (0.35 * clamp(pr * 2, 0, 1)) + ')'; c.beginPath(); c.arc(cc.x, cc.y, rad, 0, TAU); c.fill();
-        c.lineWidth = Math.max(3, cs * 0.11); c.strokeStyle = 'rgba(255,255,255,.25)'; c.beginPath(); c.arc(cc.x, cc.y, rad, 0, TAU); c.stroke();
-        c.strokeStyle = mode === 'flag' ? '#7fd0ff' : '#ff9a2e'; c.beginPath(); c.arc(cc.x, cc.y, rad, -Math.PI / 2, -Math.PI / 2 + TAU * clamp(pr, 0, 1)); c.stroke();
-        c.restore();
-      }
+      if (pr > 0) drawRing(c, gesture.idx, pr, 1);
     }
-    if (gesture && gesture.flash && t - gesture.flash < 260) {
-      var fcc = cellCenter(gesture.idx), fk = (t - gesture.flash) / 260;
-      c.strokeStyle = 'rgba(255,255,255,' + (1 - fk) + ')'; c.lineWidth = cs * 0.1; c.beginPath(); c.arc(fcc.x, fcc.y, cs * (0.6 + fk * 0.5), 0, TAU); c.stroke();
+    if (ringDrain) { // let go early: the ring visibly drains back
+      var dk = (t - ringDrain.t) / 150;
+      if (dk >= 1) ringDrain = null; else drawRing(c, ringDrain.idx, ringDrain.pr * (1 - dk), 1 - dk * 0.5);
+    }
+    if (ringPop) { // the cone landed: the full ring pops to 1.25x, then lets go
+      var rpk = (t - ringPop.t) / 200;
+      if (rpk >= 1) ringPop = null; else drawRing(c, ringPop.idx, 1, rpk < 0.6 ? 1 : 1 - (rpk - 0.6) / 0.4, 1 + 0.25 * Math.min(1, rpk / 0.6));
     }
 
     // the square that went wrong: pops up big with a red glow, then settles slightly raised
@@ -896,7 +1021,7 @@
 
     // plow
     if (plowT >= 0) {
-      var pp = clamp((t - plowT) / 2200, 0, 1), ep = pp < 0.5 ? 2 * pp * pp : 1 - Math.pow(-2 * pp + 2, 2) / 2;
+      var pp = clamp((t - plowT) / plowDur, 0, 1), ep = pp < 0.5 ? 2 * pp * pp : 1 - Math.pow(-2 * pp + 2, 2) / 2;
       var startY = oy + H * cs + cs * 1.5, endY = oy - cs * 8.5, by = startY + (endY - startY) * ep;
       if (pp < 1 && t >= plowT) Art.drawPlow(c, ox + W * cs / 2, by, W * cs + cs * 0.9, cs, t);
     }
@@ -918,7 +1043,17 @@
 
     // score pop-ups
     for (var ti = texts.length - 1; ti >= 0; ti--) {
-      var tx = texts[ti], life = tx.sub ? 1300 : 900, tk = (t - tx.t0) / life;
+      var tx = texts[ti];
+      if (tx.gx !== undefined) { // "+N" lives in the gap above the board, max 20 px, gone in 500 ms
+        var gk = (t - tx.t0) / 500; if (gk >= 1) { texts.splice(ti, 1); continue; }
+        if (oy < 24) continue; // no gap (a scrolled long road): the cascade itself is the feedback
+        var gsz = Math.min(20, oy - 6), gyy = oy - Math.min(oy, 30) / 2 - gk * 4, gxx = clamp(ox + tx.gx * cs, 30, sw - 30);
+        c.save(); c.globalAlpha = gk < 0.2 ? gk / 0.2 : 1 - (gk - 0.2) / 0.8;
+        c.font = '400 ' + Math.round(gsz) + 'px "Lilita One", system-ui, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.lineWidth = gsz * 0.2; c.lineJoin = 'round'; c.strokeStyle = 'rgba(10,20,40,.85)'; c.strokeText(tx.txt, gxx, gyy); c.fillStyle = '#ffe14d'; c.fillText(tx.txt, gxx, gyy);
+        c.restore(); continue;
+      }
+      var life = tx.sub ? 1300 : 900, tk = (t - tx.t0) / life;
       if (tk >= 1) { texts.splice(ti, 1); continue; }
       var fsz = Math.max(18, cs * 0.95) * (tx.sz || 1), pin = clamp((t - tx.t0) / 160, 0, 1), psc = 0.5 + 0.5 * easeOutBack(pin);
       var txx = tx.bx !== undefined ? ox + tx.bx * cs : tx.x, tyy = tx.by !== undefined ? oy + tx.by * cs : tx.y;
@@ -942,14 +1077,36 @@
     }
   }
 
+  // the hold ring is wider than a thumb (at least 64 px across) so it shows around the finger, and stays on screen at the edges
+  function drawRing(c, idx, pr, al, sc) {
+    var cc = cellCenter(idx), rad = Math.max(cs * 0.8, 32), m = rad * (sc || 1) + 4;
+    var x = clamp(cc.x, m, sw - m), y = clamp(cc.y, m, sh - m); rad *= sc || 1;
+    c.save(); c.lineCap = 'round'; c.globalAlpha = al;
+    c.lineWidth = 7; c.strokeStyle = 'rgba(10,20,34,' + (0.55 * clamp(pr * 3, 0, 1)) + ')'; c.beginPath(); c.arc(x, y, rad, 0, TAU); c.stroke();
+    c.lineWidth = 4; c.strokeStyle = 'rgba(255,255,255,.3)'; c.beginPath(); c.arc(x, y, rad, 0, TAU); c.stroke();
+    c.strokeStyle = mode === 'flag' ? '#7fd0ff' : '#ff9a2e'; c.beginPath(); c.arc(x, y, rad, -Math.PI / 2, -Math.PI / 2 + TAU * clamp(pr, 0, 1)); c.stroke();
+    c.restore();
+  }
+  var ringDrain = null, ringPop = null;
+
   // ---------- Hard: mini-map scroll indicator (shows while you pan or zoom, then fades) ----------
   function drawMiniMap(c, t, sx, sy) {
     if (!(status === 'playing' || status === 'ready') || camAnim || (W * cs <= sw + 2 && H * cs <= sh + 2)) return; // only when the road is bigger than the screen
     var since = t - lastViewMove, moving = gesture && (gesture.kind === 'pan' || gesture.kind === 'pinch');
     var a = moving ? 1 : since < 900 ? 1 : 1 - (since - 900) / 400;
     if (a <= 0) return;
-    var mh = Math.min(108, sh * 0.19), u = mh / H, mw = W * u, mx = sw - mw - 10, my = 10, i, x, y;
+    var i, x, y;
     c.save(); c.translate(-sx, -sy); c.globalAlpha = a;
+    if (tallRoad && W * cs <= sw + 1) {
+      // the long road: a slim scroll strip in the right gutter, outside the board (rows still snowy are lighter)
+      var gx = Math.min(sw - 5, ox + W * cs + Math.max(3, cs * 0.16) + 1.5), gy = 6, gh = sh - 12, ru = gh / H;
+      c.fillStyle = 'rgba(8,16,28,.7)'; c.fillRect(gx, gy, 4, gh);
+      for (y = 0; y < H; y++) { var left = 0; for (x = 0; x < W; x++) if (rv[y * W + x] === 0) left++; if (left) { c.fillStyle = 'rgba(217,233,247,' + (0.25 + 0.5 * left / W) + ')'; c.fillRect(gx, gy + y * ru, 4, Math.ceil(ru)); } }
+      var v0 = clamp(-oy / cs, 0, H), v1 = clamp((sh - oy) / cs, 0, H);
+      c.fillStyle = '#ffd84a'; c.fillRect(gx - 0.5, gy + v0 * ru, 5, Math.max(6, (v1 - v0) * ru));
+      c.restore(); return;
+    }
+    var mh = Math.min(108, sh * 0.19), u = mh / H, mw = W * u, mx = sw - mw - 10, my = 10;
     c.fillStyle = 'rgba(8,16,28,.82)'; pathRR(c, mx - 4, my - 4, mw + 8, mh + 8, 7); c.fill();
     c.strokeStyle = 'rgba(190,225,255,.35)'; c.lineWidth = 1; c.stroke();
     c.fillStyle = '#d9e9f7'; c.fillRect(mx, my, mw, mh);
@@ -988,17 +1145,18 @@
       var fr = Math.exp(-dt * 4.2); fling.vx *= fr; fling.vy *= fr;
       if (Math.hypot(fling.vx, fling.vy) < 25 || !(status === 'playing' || status === 'ready')) fling = null;
     }
-    if (events.length) {
-      var keep = [];
-      for (var i = 0; i < events.length; i++) { var e = events[i]; if (e.t <= t) e.fn(); else keep.push(e); }
+    if (events.length) { // split first, so events scheduled by a running event (or a fresh startGame) are never dropped
+      var due = [], keep = [];
+      for (var i = 0; i < events.length; i++) (events[i].t <= t ? due : keep).push(events[i]);
       events = keep;
+      for (i = 0; i < due.length; i++) due[i].fn();
     }
     for (var k = particles.length - 1; k >= 0; k--) {
       var p = particles[k]; p.life += dt; if (p.life >= p.max) { particles.splice(k, 1); continue; }
       p.vy += p.g * dt; if (p.drag) { var dk = Math.max(0, 1 - p.drag * dt); p.vx *= dk; p.vy *= dk; } p.x += p.vx * dt; p.y += p.vy * dt; if (p.vr) p.rot += p.vr * dt;
     }
-    if (plowT >= 0 && status === 'won' && t >= plowT) {
-      var pp = clamp((t - plowT) / 2200, 0, 1), ep = pp < 0.5 ? 2 * pp * pp : 1 - Math.pow(-2 * pp + 2, 2) / 2;
+    if (plowT >= 0 && (status === 'won' || status === 'sweep') && t >= plowT) {
+      var pp = clamp((t - plowT) / plowDur, 0, 1), ep = pp < 0.5 ? 2 * pp * pp : 1 - Math.pow(-2 * pp + 2, 2) / 2;
       var startY = oy + H * cs + cs * 1.5, endY = oy - cs * 8.5, by = startY + (endY - startY) * ep;
       if (pp < 1) {
         for (var s = 0; s < 3; s++) {
@@ -1030,27 +1188,49 @@
     var left = lvl.mines - flags;
     $('txtMines').textContent = String(left);
     $('chipMines').classList.toggle('warn', left < 0);
+    $('chipMines').classList.toggle('slipped', slipUsed);
+    if (lvl.storm) {
+      $('runTxt').textContent = 'Stretch ' + storm.stage + '  ·  Score ' + stormScore() + (storm.startBest ? '  ·  Best ' + Math.max(storm.startBest, stormScore()) : '');
+      $('stakeN').textContent = '-' + STORM_HINT / 1000 + 's';
+    }
     dirtyHud = false;
   }
   function pulseMines() { var c = $('chipMines'); c.classList.remove('pulse'); void c.offsetWidth; c.classList.add('pulse'); }
   function updateTimer() {
     if (!lvl) return;
+    if (lvl.storm) {
+      var left = stormLeft();
+      if (left <= 0 && status === 'playing') { stormOver(); return; }
+      var ls = Math.ceil(Math.max(0, left) / 1000);
+      if (ls !== lastHudSec) {
+        lastHudSec = ls; $('txtTime').textContent = fmt(ls * 1000);
+        var low = ls <= 10 && status === 'playing';
+        $('chipTime').classList.toggle('warn', low);
+        if (low && ls !== storm.lastTick) { storm.lastTick = ls; storm.pulseAt = now(); Sfx.tick(ls <= 5); var ch = $('chipTime'); ch.classList.remove('pulse'); void ch.offsetWidth; ch.classList.add('pulse'); }
+      }
+      return;
+    }
     var s = Math.floor(elapsed() / 1000);
     if (s !== lastHudSec) { lastHudSec = s; $('txtTime').textContent = fmt(elapsed()); }
   }
 
   // ---------- snow background ----------
   var flakes = [];
-  (function () { var r = Math.random; var n = (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) ? 0 : 42; for (var i = 0; i < n; i++) flakes.push({ x: r(), y: r(), r: 0.6 + r() * 1.9, v: 0.02 + r() * 0.05, ph: r() * 6.28, d: 0.02 + r() * 0.03 }); })();
+  (function () { var r = Math.random; var n = (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) ? 0 : 14; for (var i = 0; i < n; i++) flakes.push({ x: r(), y: r(), r: 0.6 + r() * 1.9, v: 0.02 + r() * 0.05, ph: r() * 6.28, d: 0.02 + r() * 0.03 }); })();
   var lastSnow = 0;
   function drawSnowBg(ts, dt) {
     if (ts - lastSnow < 33) return; lastSnow = ts;
-    var c = snowCtx, w = snowCv.width, h = snowCv.height;
+    var c = snowCtx, w = snowCv.width, h = snowCv.height, k = w / Math.max(1, window.innerWidth);
     c.clearRect(0, 0, w, h);
+    // flakes fall only in the sky band between the HUD and the board: never over the HUD, the board or the bottom bar
+    if (!lvl || status === 'title') return;
+    var top = stage.offsetTop, band = Math.min(oy, sh) - Math.max(3, cs * 0.16) - 6;
+    if (band < 24) return;
     for (var i = 0; i < flakes.length; i++) {
-      var f = flakes[i]; f.y += f.v * 0.033; f.x += Math.sin(ts / 1500 + f.ph) * f.d * 0.033;
-      if (f.y > 1.02) { f.y = -0.02; f.x = Math.random(); }
-      c.fillStyle = 'rgba(255,255,255,' + (0.25 + f.r * 0.18) + ')'; c.beginPath(); c.arc(f.x * w, f.y * h, f.r, 0, TAU); c.fill();
+      var f = flakes[i]; f.y += f.v * 0.033 * 2.5; f.x += Math.sin(ts / 1500 + f.ph) * f.d * 0.033;
+      if (f.y > 1) { f.y = 0; f.x = Math.random(); }
+      var fy = f.y < 0.15 ? f.y / 0.15 : f.y > 0.85 ? (1 - f.y) / 0.15 : 1;
+      c.fillStyle = 'rgba(255,255,255,' + (0.5 * fy) + ')'; c.beginPath(); c.arc(f.x * w, (top + f.y * band) * k, f.r * 0.8, 0, TAU); c.fill();
     }
   }
 
@@ -1067,7 +1247,7 @@
   requestAnimationFrame(frame);
 
   // ---------- input ----------
-  var ptr = new Map(), gesture = null, fling = null;
+  var ptr = new Map(), gesture = null, fling = null, inputLockUntil = 0;
   function localPos(e) { var r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
   function cellAt(p) {
     var x = Math.floor((p.x - ox) / cs), y = Math.floor((p.y - oy) / cs);
@@ -1087,8 +1267,9 @@
     e.preventDefault(); Sfx.unlock(); kbActive = false;
     // impatient? a tap during the win show jumps to the result
     if (lvl && status === 'won' && !lvl.run && plowT >= 0 && now() > plowT + 600 && $('result').hidden) { showResult(true); return; }
-    if (!lvl || (status !== 'ready' && status !== 'playing')) return;
+    if (!lvl || (status !== 'ready' && status !== 'playing') || now() < inputLockUntil) return;
     try { cv.setPointerCapture(e.pointerId); } catch (er) {}
+    if (tipEl.dataset.where === 'hud' && tipEl.classList.contains('show')) hideTip();
     var p = localPos(e);
     ptr.set(e.pointerId, { x: p.x, y: p.y, sx: p.x, sy: p.y });
     hideGhost();
@@ -1108,7 +1289,7 @@
           var g0 = gesture;
           var commitLong = function () {
             if (gesture !== g0 || gesture.kind !== 'press') return;
-            gesture.long = true; gesture.timerOn = false; gesture.lateWait = 0; gesture.flash = now(); pressIdx = -1;
+            gesture.long = true; gesture.timerOn = false; gesture.lateWait = 0; gesture.flash = now(); ringPop = { idx: gesture.idx, t: now() }; pressIdx = -1;
             var before = rv[gesture.idx];
             primaryAction(gesture.idx, true);
             gesture.coneFlip = (before === 0 && rv[gesture.idx] === 2) || (before === 2 && rv[gesture.idx] === 0);
@@ -1158,7 +1339,7 @@
       var wasLong = gesture.long, idx0 = gesture.idx;
       if (gesture.lateWait) { // the hold timer fired late: the event times say whether this was a hold or a tap
         clearTimeout(gesture.lateWait); gesture.lateWait = 0;
-        if ((e.timeStamp || performance.now()) - gesture.downTs >= LONG_MS && !cancelled && idx0 >= 0) { gesture.flash = now(); cancelPress(); primaryAction(idx0, true); gesture = ptr.size ? { kind: 'dead' } : null; if (!ptr.size) { pressIdx = -1; try { cv.releasePointerCapture(e.pointerId); } catch (er) {} } return; }
+        if ((e.timeStamp || performance.now()) - gesture.downTs >= LONG_MS && !cancelled && idx0 >= 0) { gesture.flash = now(); ringPop = { idx: idx0, t: now() }; cancelPress(); primaryAction(idx0, true); gesture = ptr.size ? { kind: 'dead' } : null; if (!ptr.size) { pressIdx = -1; try { cv.releasePointerCapture(e.pointerId); } catch (er) {} } return; }
       }
       cancelPress();
       // the hold fired, but the event times say the finger lifted early (the page was busy): it was a tap after all
@@ -1167,8 +1348,10 @@
       }
       var heldMs = (e.timeStamp || performance.now()) - (gesture.downTs || 0);
       if (!cancelled && !wasLong && idx0 >= 0 && gesture.armed && heldMs >= RING_DELAY && rv[idx0] === 0 && board) {
-        cancelled = true; nopeAt[idx0] = now(); // the ring was filling: lifting early means "never mind"
-        if (!seen.holdcancel) { markSeen('holdcancel'); showTip('Let go early and nothing happens. Hold until the ring fills to plant a cone.', 3400); }
+        // the ring was filling: lifting early means "never mind", but never silently
+        cancelled = true; wobAt[idx0] = now(); Sfx.soft(); buzz(4);
+        ringDrain = { idx: idx0, pr: clamp((heldMs - RING_DELAY) / (LONG_MS - RING_DELAY), 0.08, 1), t: now() };
+        if (!seen.holdcancel) { markSeen('holdcancel'); showTip('Let go early and nothing happens. Hold until the ring fills for a cone.', 3000); }
       }
       if (!cancelled && !wasLong && idx0 >= 0) {
         var inside = p.x >= 0 && p.y >= 0 && p.x <= sw && p.y <= sh;
@@ -1243,12 +1426,19 @@
     ghostEl.style.left = cx + 'px'; ghostEl.style.top = cy + 'px'; ghostEl.hidden = false;
   }
   function hideGhost() { ghostEl.hidden = true; }
-  // a snowy square that borders the pre-opened area, nearest the middle of the screen
-  function ghostTarget() {
-    var bestI = -1, bd = 1e9;
-    for (var i = 0; i < N; i++) { if (rv[i] !== 0 || board.mine[i]) continue; var l = nbT[i], edge = false; for (var j = 0; j < l.length; j++) if (rv[l[j]] === 1) edge = true; if (!edge) continue;
+  // a square the numbers prove safe (the same logic as Hint), nearest the middle of the screen; if the solver finds none,
+  // any safe snowy square bordering the opening
+  function ghostTarget(anySafe) {
+    var bestI = -1, bd = 1e9, proven = null;
+    if (!anySafe) {
+      var view = new Uint8Array(N); for (var v = 0; v < N; v++) view[v] = rv[v] === 1 ? 1 : 0;
+      var hh = E.hint(W, H, view, board.num);
+      if (hh && hh.kind === 'safe') { proven = {}; hh.cells.forEach(function (q) { if (rv[q] === 0) proven[q] = 1; }); }
+      if (!proven || !Object.keys(proven).length) return ghostTarget(true);
+    }
+    for (var i = 0; i < N; i++) { if (rv[i] !== 0 || board.mine[i] || (proven && !proven[i])) continue; var l = nbT[i], edge = false; for (var j = 0; j < l.length; j++) if (rv[l[j]] === 1) edge = true; if (!edge) continue;
       var c = cellCenter(i), d = Math.hypot(c.x - sw / 2, c.y - sh * 0.45); if (c.x < cs || c.x > sw - cs || c.y < cs || c.y > sh - cs * 2) d += 1e5; if (d < bd) { bd = d; bestI = i; } }
-    return bestI;
+    return bestI < 0 && !anySafe ? ghostTarget(true) : bestI;
   }
 
   // ---------- screens, results ----------
@@ -1263,7 +1453,7 @@
       $('rTitle').textContent = lvl.daily ? 'Daily road open!' : 'Road open!';
       sub = replay ? 'Practice run: no best time' : lvl.daily ? dayLabel(dailyDate) + (hinted ? ' · hinted run' : '') + ' · next road in ' + nextRoadIn() : lvl.name + (hinted ? ' · hinted run (no best time)' : '');
       html += stat(fmt(lastResult.ms, true), 'Time', lastResult.ms);
-      var b = best[lvl.key]; html += stat(b ? fmt(b, true) : '--', 'Best');
+      var b = best[bestKey()]; html += stat(b ? fmt(b, true) : '--', 'Best');
       if (lvl.daily) html += stat(dailyRec.streak + (dailyRec.streak === 1 ? ' day' : ' days'), 'Streak');
       else html += stat(String(stats.wins), 'Roads cleared');
       html += stat(String(hinted), hinted === 1 ? 'Hint used' : 'Hints used');
@@ -1274,7 +1464,7 @@
         md.querySelector('span').textContent = MEDAL_NAMES[lastResult.medal][0].toUpperCase() + MEDAL_NAMES[lastResult.medal].slice(1) + (lastResult.medalUp ? ' · upgraded!' : '');
         void md.offsetWidth; md.style.animation = 'none'; void md.offsetWidth; md.style.animation = '';
         if (lastResult.medal < 2 && PAR[lvl.key]) {
-          var goal = PAR[lvl.daily && W >= 16 ? 'hard' : lvl.key][lastResult.medal === 0 ? 1 : 0];
+          var goal = PAR[lvl.daily && H >= 28 ? 'hard' : lvl.key][lastResult.medal === 0 ? 1 : 0];
           $('rNext').textContent = (hinted || replay) ? 'Clear it without hints for silver or gold.' : 'Clear it in ' + fmt(goal) + ' for ' + MEDAL_NAMES[lastResult.medal + 1] + '.';
           $('rNext').hidden = false;
         }
@@ -1290,12 +1480,19 @@
       if (sc > (best.runScore || 0)) { best.runScore = sc; store.set('best', best); }
       html += stat(String(sc), 'Score'); html += stat(String(best.runScore || sc), 'Best score');
       if (sc > prevBestScore) { $('rBadge').hidden = false; $('rBadge').textContent = 'New best!'; Sfx.record(); }
+    } else if (lvl.storm) {
+      $('rTitle').textContent = 'Snowed in!';
+      var ssc = stormScore();
+      sub = 'Out of time on stretch ' + storm.stage + '.';
+      html += stat(String(ssc), 'Score'); html += stat(String(Math.max(best.storm || 0, ssc)), 'Best score');
+      html += stat(String(storm.cleared), storm.cleared === 1 ? 'Board cleared' : 'Boards cleared'); html += stat(String(best.stormStage || storm.cleared), 'Best boards');
+      if (ssc > storm.startBest && ssc > 0) { $('rBadge').hidden = false; $('rBadge').textContent = 'New best!'; Sfx.record(); }
     } else {
       var lt = (hitIdx & 1) ? ['Heaved!', 'Frost heave!', 'Whoa, bump!'] : ['Pothole!', 'Axle crack!', 'Clunk!'];
       $('rTitle').textContent = lt[(stats.plays + revealed) % lt.length];
       var pct = Math.floor(revealed / safeCount * 100);
-      sub = pct + '% of the road cleared. The numbers had the answer. A retry of this road is practice; a new road counts for best times.';
-      html += stat(fmt(timeAcc, true), 'Time'); html += stat(pct + '%', 'Cleared');
+      sub = pct + '% cleared.';
+      html += stat(fmt(timeAcc, true), 'Time'); var lb = best[bestKey()]; html += stat(lb ? fmt(lb, true) : '--', 'Best');
     }
     $('rSub').textContent = sub; $('rStats').innerHTML = html;
     var again = $('rAgain'), same = $('rSame');
@@ -1303,16 +1500,16 @@
     again.className = 'big primary'; same.className = 'big';
     if (!won) {
       if (lvl.daily) { again.textContent = 'Try again'; same.hidden = true; again.dataset.act = 'same'; }
-      else { again.textContent = 'Retry · practice'; same.textContent = 'New road'; same.hidden = false; again.dataset.act = 'same'; same.dataset.act = 'new'; }
+      else { again.textContent = 'New road'; same.textContent = 'Retry (practice)'; same.hidden = false; again.dataset.act = 'new'; same.dataset.act = 'same'; }
     } else {
       if (lvl.daily) { again.textContent = 'Back to title'; again.dataset.act = 'menu'; same.textContent = 'Practice this road'; same.hidden = false; same.dataset.act = 'same'; }
       else { again.textContent = 'New road'; again.dataset.act = 'new'; same.textContent = 'Retry this road'; same.hidden = false; same.dataset.act = 'same'; }
     }
-    if (lvl.run) { again.textContent = 'Run again'; again.dataset.act = 'new'; same.hidden = true; }
+    if (lvl.run || lvl.storm) { again.textContent = 'Run again'; again.dataset.act = 'new'; same.hidden = true; }
     $('rShare').hidden = !(won && lvl.daily);
     $('rMenu').hidden = (won && lvl.daily);
     r.hidden = false; r.classList.remove('peek'); $('runhelp').hidden = true; setHintBtn();
-    if (!won && !lvl.run && !seen.peek) { markSeen('peek'); at(now() + 1800, function () { if (status === 'lost' && !r.hidden) showTip('Tap the board above to hide this and study the road.', 3200); }); }
+    if (!won && !lvl.run && !lvl.storm && !seen.peek) { markSeen('peek'); at(now() + 1800, function () { if (status === 'lost' && !r.hidden) showTip('Tap the board above to hide this and study the road.', 3200); }); }
     // the time ticks up to the final value
     Array.prototype.forEach.call(r.querySelectorAll('[data-ms]'), function (el) {
       var to = +el.dataset.ms, t0 = performance.now();
@@ -1341,7 +1538,7 @@
   $('rMenu').addEventListener('click', function () { Sfx.click(); showTitle(); });
   $('rShare').addEventListener('click', function () {
     var mi = ['🥉', '🥈', '🥇'][lastResult.medal] || '', wk = ''; for (var di = 6; di >= 0; di--) { var dd = new Date(); dd.setDate(dd.getDate() - di); var dk = dd.getFullYear() + '-' + String(dd.getMonth() + 1).padStart(2, '0') + '-' + String(dd.getDate()).padStart(2, '0'); wk += dailyRec.times[dk] ? '🟧' : '⬜'; }
-    var txt = 'Frost Heave · Daily Road ' + dailyDate + (W >= 16 ? ' (big road)' : '') + '\n' + mi + ' ' + fmt(lastResult.ms, true) + (hinted ? ' (hinted)' : '') + ' · streak ' + dailyRec.streak + '\n' + wk;
+    var txt = 'Frost Heave · Daily Road ' + dailyDate + (H >= 28 ? ' (big road)' : '') + '\n' + mi + ' ' + fmt(lastResult.ms, true) + (hinted ? ' (hinted)' : '') + ' · streak ' + dailyRec.streak + '\n' + wk;
     if (navigator.share) { navigator.share({ text: txt }).catch(function () {}); }
     else if (navigator.clipboard) { navigator.clipboard.writeText(txt).then(function () { toast('Copied to clipboard'); }, function () { toast('Could not copy'); }); }
   });
@@ -1352,7 +1549,7 @@
     if (status === 'playing') timeAcc += now() - tStart;
     status = 'paused'; cancelPress(); ptr.clear(); gesture = null;
     $('sheet').hidden = false; syncSettingsUi();
-    $('shRestart').textContent = lvl.run ? 'Abandon run, start over' : 'Restart this road'; $('shNew').hidden = !!lvl.run;
+    $('shRestart').textContent = lvl.run || lvl.storm ? 'Abandon run, start over' : 'Restart this road'; $('shNew').hidden = !!(lvl.run || lvl.storm);
   }
   function resume() {
     if (status !== 'paused') return;
@@ -1362,14 +1559,14 @@
   $('btnMenu').addEventListener('click', function () { Sfx.unlock(); Sfx.click(); if (status === 'playing' || status === 'ready') pause(); else if (status === 'won' || status === 'lost') showTitle(); });
   $('shResume').addEventListener('click', function () { Sfx.click(); resume(); });
   $('shRestart').addEventListener('click', function () {
-    if (lvl && lvl.run) { if (!(restartArmed && now() - restartArmed < 2500)) { restartArmed = now(); toast('Tap again to abandon this run'); Sfx.click(); return; } restartArmed = 0; } status = prevStatus === 'playing' ? 'playing' : 'ready'; if (status === 'playing') { tStart = now(); } restartSame(); });
+    if (lvl && (lvl.run || lvl.storm)) { if (!(restartArmed && now() - restartArmed < 2500)) { restartArmed = now(); toast('Tap again to abandon this run'); Sfx.click(); return; } restartArmed = 0; } status = prevStatus === 'playing' ? 'playing' : 'ready'; if (status === 'playing') { tStart = now(); } restartSame(); });
   $('shNew').addEventListener('click', function () { if (lvl.daily) { status = 'ready'; restartSame(); } else startGame(lvl.key); });
   $('shQuit').addEventListener('click', function () { Sfx.click(); showTitle(); });
   $('btnRestart').addEventListener('click', function () {
     Sfx.unlock();
     if (status === 'ready' && !board) return;
     if (lvl && lvl.run) return; // a run can't be restarted from here (the button is hidden in Run)
-    if (status === 'playing' && revealed > 0 && !(restartArmed && now() - restartArmed < 2500)) { restartArmed = now(); toast('Tap again to restart (practice, no best time)'); Sfx.click(); return; }
+    if (status === 'playing' && revealed > 0 && !(restartArmed && now() - restartArmed < 2500)) { restartArmed = now(); toast(lvl.storm ? 'Tap again to start the run over' : 'Tap again to restart (practice, no best time)'); Sfx.click(); return; }
     restartArmed = 0; if (status === 'paused') status = 'ready'; restartSame();
   });
   var restartArmed = 0;
@@ -1387,10 +1584,11 @@
     if (streak) meta += '\n' + streak + '-day streak';
     if (dailyRec.bestStreak > Math.max(1, streak)) meta += (streak ? ' · ' : '\n') + 'best ' + dailyRec.bestStreak;
     $('dailyMeta').textContent = meta;
+    $('bestStorm').textContent = best.storm ? 'Best ' + best.storm + '\n' + (best.stormStage || 0) + (best.stormStage === 1 ? ' board' : ' boards') : '40 s on the clock';
     $('bestRun').textContent = best.runScore ? 'Best ' + best.runScore + ' · ' + (best.run || 0) + ' stretch' + (best.run === 1 ? '' : 'es') : best.run ? 'Best ' + best.run + (best.run === 1 ? ' stretch' : ' stretches') : '';
     ['easy', 'medium', 'hard'].forEach(function (k) {
-      var el = $('best' + k[0].toUpperCase() + k.slice(1)), m = medals[k];
-      el.innerHTML = (m >= 0 ? '<i class="mdot ' + MEDAL_NAMES[m] + '"></i>' : '') + (best[k] ? 'Best ' + fmt(best[k], true) : '');
+      var bk = bestKey(k), el = $('best' + k[0].toUpperCase() + k.slice(1)), m = medals[bk];
+      el.innerHTML = (m >= 0 ? '<i class="mdot ' + MEDAL_NAMES[m] + '"></i>' : '<i class="mdot none"></i>') + (best[bk] ? fmt(best[bk]) : '');
     });
     var wk = '', d0 = new Date();
     for (var di = 6; di >= 0; di--) { var dd = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() - di), dk = dd.getFullYear() + '-' + String(dd.getMonth() + 1).padStart(2, '0') + '-' + String(dd.getDate()).padStart(2, '0');
@@ -1407,9 +1605,12 @@
   }
   function syncSettingsUi() {
     var s = settings;
-    ['btnTitleSound', 'shSound'].forEach(function (id) { $(id).textContent = 'Sound: ' + (s.sound ? 'on' : 'off'); });
-    ['btnTitleMusic', 'shMusic'].forEach(function (id) { $(id).textContent = 'Music: ' + (s.music ? 'on' : 'off'); });
-    ['btnTitleHaptics', 'shHaptics'].forEach(function (id) { $(id).textContent = 'Buzz: ' + (s.haptics ? 'on' : 'off'); });
+    $('shSound').textContent = 'Sound: ' + (s.sound ? 'on' : 'off');
+    $('shMusic').textContent = 'Music: ' + (s.music ? 'on' : 'off');
+    $('shHaptics').textContent = 'Buzz: ' + (s.haptics ? 'on' : 'off');
+    [['btnTitleSound', s.sound, 'Sound'], ['btnTitleMusic', s.music, 'Music'], ['btnTitleHaptics', s.haptics, 'Vibration']].forEach(function (b) {
+      $(b[0]).classList.toggle('off', !b[1]); $(b[0]).setAttribute('aria-pressed', String(!!b[1])); $(b[0]).setAttribute('aria-label', b[2] + (b[1] ? ' on' : ' off'));
+    });
     $('btnSound').classList.toggle('off', !s.sound);
   }
   function toggle(k) { settings[k] = !settings[k]; store.set('settings', settings); Sfx.unlock(); applyAudio(); syncSettingsUi(); if (k === 'haptics' && settings.haptics) buzz(15); Sfx.click(); }
@@ -1446,7 +1647,7 @@
     step: function (ms) { tOff += ms; var t = now(); update(t, ms / 1000); if (status === 'playing') updateTimer(); render(t); return this.state(); },
     state: function () {
       return { status: status, mode: mode, level: lvl && lvl.key, w: W, h: H, mines: lvl && lvl.mines, flags: flags, revealed: revealed, safe: safeCount,
-        elapsed: Math.round(elapsed()), hinted: hinted, hasBoard: !!board, startIdx: startIdx, hit: hitIdx, cs: cs, ox: ox, oy: oy, sw: sw, sh: sh, fitCs: fitCs, genMs: lvl && lvl.genMs };
+        elapsed: Math.round(elapsed()), hinted: hinted, tall: tallRoad, maxCs: maxCs, hasBoard: !!board, startIdx: startIdx, hit: hitIdx, cs: cs, ox: ox, oy: oy, sw: sw, sh: sh, fitCs: fitCs, genMs: lvl && lvl.genMs };
     },
     cellXY: function (i) { var c = cellCenter(i), r = cv.getBoundingClientRect(); return { x: r.left + c.x, y: r.top + c.y }; },
     reveal: function (i) { actDig(i); return this.state(); },
@@ -1468,7 +1669,14 @@
       return this.state();
     },
     flagAllMines: function () { for (var i = 0; i < N; i++) if (board && board.mine[i] && rv[i] === 0) actFlag(i); return this.state(); },
-    lose: function () { if (board) { for (var i = 0; i < N; i++) if (board.mine[i] && rv[i] === 0) { actDig(i); break; } } return this.state(); },
+    // digs hidden hazards until the road is lost (Classic forgives one slip, so that takes two); Storm Shift runs the clock out
+    lose: function () {
+      if (lvl && lvl.storm) { if (status === 'ready' || status === 'playing') { if (status === 'ready') beginPlay(); storm.bank = elapsed(); updateTimer(); } return this.state(); }
+      for (var k = 0; k < 3 && board && (status === 'ready' || status === 'playing'); k++) { for (var i = 0; i < N; i++) if (board.mine[i] && rv[i] === 0) { actDig(i); break; } if (lvl.run) break; }
+      return this.state();
+    },
+    stormInfo: function () { return storm ? { stage: storm.stage, left: Math.round(stormLeft()), bank: storm.bank, dug: storm.dug, cleared: storm.cleared, hits: storm.hits, score: stormScore() } : null; },
+    slipUsed: function () { return slipUsed; },
     showTitle: showTitle, pause: pause, resume: resume,
     clearSaves: function () { try { localStorage.clear(); } catch (e) {} },
     settings: function () { return settings; },
@@ -1481,7 +1689,8 @@
   // levels: easy medium hard daily; states: play, flags, hint, lose, win. ?demo=title shows the title.
   function runDemo(name) {
     var parts = name.split('-'), key = parts[0], st = parts[1] || 'play';
-    if (!E.LEVELS[key] && key !== 'daily' && key !== 'run') return;
+    if (!E.LEVELS[key] && key !== 'daily' && key !== 'run' && key !== 'storm') return;
+    if (key === 'storm' && /^s\d+$/.test(st)) { storm = null; startGame('storm', { seed: 4242 }); storm.stage = +st.slice(1); startGame('storm', { cont: true }); window.__T.step(1200); return; }
     startGame(key, key === 'daily' ? {} : { seed: 4242 });
     $('runhelp').hidden = true; // demo states skip the first-run rules card
     var T = window.__T;

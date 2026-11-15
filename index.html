@@ -30,10 +30,12 @@
       <svg class="ico coneic" viewBox="0 0 24 24"><path d="M12 3 L15 17 H9 Z" fill="#ff8a24" stroke="#a13f00" stroke-width="1.2" stroke-linejoin="round"/><path d="M10.4 9.5h3.2M9.7 13h4.6" stroke="#fff" stroke-width="1.6"/><rect x="5.5" y="17" width="13" height="3.4" rx="1.2" fill="#2b2b33"/></svg>
       <svg class="ico heart" viewBox="0 0 24 24"><path d="M12 21s-8-5.2-8-11a4.6 4.6 0 0 1 8-3 4.6 4.6 0 0 1 8 3c0 5.800-8 11-8 11Z" fill="#ff5d6c" stroke="#8d1d2b" stroke-width="1.5" stroke-linejoin="round"/></svg>
       <span id="txtMines">0</span>
+      <svg class="ico slipheart" viewBox="0 0 24 24" aria-label="One slip forgiven"><path d="M12 20s-7-4.6-7-9.6a4 4 0 0 1 7-2.6 4 4 0 0 1 7 2.6c0 5-7 9.6-7 9.6Z"/></svg>
     </div>
     <div class="chip" id="chipTime" aria-label="Time">
       <svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="13" r="7.5" fill="none" stroke="#bfe4ff" stroke-width="2"/><path d="M12 13V8.5M9.5 3h5" stroke="#bfe4ff" stroke-width="2" stroke-linecap="round"/></svg>
       <span id="txtTime">0:00</span>
+      <b id="timeFlash"></b>
     </div>
     <button id="btnHint" class="ibtn" aria-label="Hint"><svg viewBox="0 0 24 24" class="bulb"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3Z"/></svg><svg viewBox="0 0 24 24" class="stake"><path d="M8 21 9.5 4" class="pole"/><path d="M9.5 4 18 6.5 9 10" class="flagp"/><path d="M5 21h7" class="pole"/></svg><i id="stakeN"></i></button>
     <button id="btnSound" class="ibtn" aria-label="Sound"><svg viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4Z" class="fillme"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" class="waves"/><path d="M15 9l6 6M21 9l-6 6" class="mute"/></svg></button>
@@ -44,8 +46,8 @@
   <main id="stage">
     <canvas id="board"></canvas>
     <div id="ghost" hidden><div class="ring"></div><svg viewBox="0 0 48 48" class="hand"><path d="M20 6a3 3 0 0 1 6 0v14l2-1c2-1 4 0 4.6 1.6l.4.9 1.6-.6c1.8-.6 3.6.4 4 2.2l.5 2.2 1.2-.3c1.9-.4 3.6 1 3.5 2.9l-.7 9.4c-.3 3.6-3.3 6.4-7 6.4H29c-3 0-5.6-1.6-7-4.2L14.700 29.800c-.9-1.600-.1-3.500 1.600-4.100 1.100-.4 2.300 0 3.200.9L20 27.300Z" fill="#fff" stroke="#23405e" stroke-width="2" stroke-linejoin="round"/></svg></div>
-    <div id="tip" role="status"></div>
   </main>
+  <div id="tip" role="status"></div>
 
   <footer id="bar">
     <button id="btnRestart" class="ibtn" aria-label="Restart this road"><svg viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2.2-5.1M19 4v4.5h-4.5"/></svg></button>
@@ -77,16 +79,19 @@
     </div>
     <div class="menu" id="menuList">
       <button class="card daily" data-play="daily"><span class="cname">Daily Road<small id="dailyDate"></small><span class="week" id="dailyWeek"></span></span><span class="cmeta" id="dailyMeta"></span></button>
-      <button class="card" data-play="easy"><span class="cname">Easy<small>9 × 9 · 10 hazards</small></span><span class="cmeta" id="bestEasy"></span></button>
-      <button class="card" data-play="medium"><span class="cname">Medium<small>12 × 18 · 40 hazards</small></span><span class="cmeta" id="bestMedium"></span></button>
-      <button class="card" data-play="hard"><span class="cname">Hard<small>16 × 28 · 90 hazards · pinch to zoom</small></span><span class="cmeta" id="bestHard"></span></button>
-      <button class="card run" data-play="run"><span class="cname">Pothole Run<small>Roguelike · upgrades, stakes, HP</small></span><span class="cmeta" id="bestRun"></span></button>
+      <button class="card storm" data-play="storm"><span class="cname">Storm Shift<small>Clear boards against the clock</small></span><span class="cmeta" id="bestStorm"></span></button>
+      <div class="levels">
+        <button class="lv" data-play="easy"><b>Easy</b><small>9×9 · 10</small><span id="bestEasy"></span></button>
+        <button class="lv" data-play="medium"><b>Medium</b><small>12×18 · 40</small><span id="bestMedium"></span></button>
+        <button class="lv" data-play="hard"><b>Hard</b><small>12×32 · 80</small><span id="bestHard"></span></button>
+      </div>
+      <span id="bestRun" hidden></span>
     </div>
     <div class="title-foot">
       <button id="btnHelp" class="link">How to play</button>
-      <button id="btnTitleSound" class="link">Sound: on</button>
-      <button id="btnTitleMusic" class="link">Music: on</button>
-      <button id="btnTitleHaptics" class="link">Buzz: on</button>
+      <button id="btnTitleSound" class="tog" aria-label="Sound"><svg viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4Z" class="fillme"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11" class="on"/><path d="M15 9l6 6M21 9l-6 6" class="off"/></svg></button>
+      <button id="btnTitleMusic" class="tog" aria-label="Music"><svg viewBox="0 0 24 24"><path d="M9 18V6l10-2v12" /><circle cx="6.5" cy="18" r="2.5" class="fillme"/><circle cx="16.5" cy="16" r="2.5" class="fillme"/><path d="M4 4l16 16" class="off"/></svg></button>
+      <button id="btnTitleHaptics" class="tog" aria-label="Vibration"><svg viewBox="0 0 24 24"><rect x="8" y="3.5" width="8" height="17" rx="2"/><path d="M4.5 8v8M19.5 8v8" class="on"/><path d="M4 4l16 16" class="off"/></svg></button>
     </div>
   </section>
 
@@ -98,11 +103,12 @@
       <h2>How to play</h2>
       <p><b>1. Dig.</b> Tap a snowy square. Your first tap is always safe.</p>
       <p><b>2. Read the numbers.</b> A number counts the potholes and frost heaves touching that square, all 8 neighbors.</p>
-      <p><b>3. Plant cones.</b> Hold a square (or switch to Cone mode) to mark a hazard.</p>
+      <p><b>3. Plant cones.</b> Hold a square until the ring fills (about half a second) to mark a hazard, or switch to Cone mode. A quick tap always digs.</p>
       <p><b>4. Open fast.</b> When a number has all its cones, tap the number to dig the rest around it.</p>
       <p>No guessing is ever needed: every road can be cleared by logic alone. Stuck? The lightbulb shows a safe square. Finished numbers fade so you can see what's left.</p>
+      <p><b>One slip.</b> The first hazard you dig on a road is forgiven: it gets a cone and costs 20 seconds. The heart by the cone counter shows it is still there. The second one ends the road.</p>
       <p><b>Smart cones.</b> If a number can only mean hazards (it needs exactly as many cones as it has snowy squares), tap it and the cones go down for you.</p>
-      <p><b>Pothole Run.</b> Hazards have strength 1 to 4 and numbers add up the strength still hidden nearby. Digging one costs that much HP, but it fills the hole and the numbers around it drop. Stakes check a square safely. Clear a stretch to repair and pick an upgrade.</p>
+      <p><b>Storm Shift.</b> Small boards, one clock. You start with 40 seconds and every board opens already started. Clearing a board adds time (the clock holds at most a minute); the bar along the top of the board is your clock. A dug hazard costs 10 seconds, a hint costs 8. How many boards can you plow before the clock runs out?</p>
       <button class="big primary" id="helpClose">Got it</button>
     </div>
   </section>

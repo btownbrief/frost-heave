@@ -277,11 +277,19 @@
   var LEVELS = {
     easy:   { key: 'easy',   name: 'Easy',   w: 9,  h: 9,  mines: 10, maxOpen: 0.4 },
     medium: { key: 'medium', name: 'Medium', w: 12, h: 18, mines: 40, maxOpen: 0.25 },
-    hard:   { key: 'hard',   name: 'Hard',   w: 16, h: 28, mines: 90 }
+    hard:   { key: 'hard',   name: 'Hard',   w: 12, h: 32, mines: 80 }
   };
+  // Storm Shift: small no-guess boards against one clock. Index 0 = stretch 1; past the end the last entry repeats
+  // with one more hazard per stretch up to 35.
+  var STORM = [[7, 8, 7], [7, 9, 9], [8, 10, 13], [8, 11, 16], [9, 12, 21], [9, 13, 24], [10, 14, 30], [10, 14, 32], [10, 14, 33], [10, 14, 34]];
+  function stormSpec(stage) {
+    var k = Math.max(1, stage) - 1, r = STORM[Math.min(k, STORM.length - 1)];
+    var mines = k < STORM.length ? r[2] : Math.min(35, r[2] + (k - STORM.length + 1));
+    return { w: r[0], h: r[1], mines: mines, maxOpen: 0.4 };
+  }
 
   var api = { mulberry32: mulberry32, hashString: hashString, topo: topo, solve: solve, evaluate: evaluate,
-              generate: generate, hint: hint, countNumbers: countNumbers, LEVELS: LEVELS };
+              generate: generate, hint: hint, countNumbers: countNumbers, LEVELS: LEVELS, stormSpec: stormSpec };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.FHEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

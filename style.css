@@ -270,3 +270,67 @@ body.probing #btnHint { background: rgba(255,170,60,.35); box-shadow: 0 0 0 3px 
 .rrule .ri svg { width: 22px; height: 22px; }
 body.isrun #btnRestart { visibility: hidden; }
 @media (orientation: landscape) and (max-height: 560px) { #result .stats { display: flex; justify-content: center; } #result .stat { flex: 1 1 0; max-width: 25%; } }
+
+/* ---------- Nov 15 upgrade: calmer, clearer ---------- */
+/* tips never sit on squares: in the gap above the board, or over the HUD row (game.js places them) */
+#tip { bottom: auto; top: 0; z-index: 6; font-size: 14px; padding: 8px 12px; }
+#tip.inhud { min-height: 44px; display: flex; align-items: center; justify-content: center; font-size: 13.5px; padding: 4px 12px; border-radius: 22px;
+  background: rgba(10,20,34,.96); left: calc(var(--sal) + 10px); right: calc(var(--sar) + 10px); }
+#toast, body.isrun #toast { top: calc(var(--sat) + 8px); min-height: 44px; display: flex; align-items: center; justify-content: center; padding: 6px 12px; border-radius: 22px; background: rgba(10,20,34,.96); }
+@media (min-width: 560px) and (min-height: 600px) { #tip, #tip.inhud, #toast { left: 50%; right: auto; width: 500px; margin-left: -250px; } }
+#tip.inrail, #toast.inrail { right: auto; margin-left: 0; font-size: 12.5px; padding: 7px 9px; border-radius: 14px; background: rgba(10,20,34,.96); z-index: 7; }
+
+/* timer chip flash: "Slip! +20s", "-10s", "+14s" */
+#chipTime { position: relative; }
+#timeFlash { position: absolute; inset: -1px; border-radius: 22px; display: flex; align-items: center; justify-content: center; font-weight: 400;
+  opacity: 0; pointer-events: none; font-size: 21px; letter-spacing: .3px; }
+#timeFlash.bad { background: #e2434b; color: #fff; }
+#timeFlash.good { background: #39c27f; color: #062716; }
+#timeFlash.show { animation: tflash 1.5s ease-out forwards; }
+@keyframes tflash { 0% { opacity: 0; transform: scale(1.18); } 8% { opacity: 1; transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } }
+#chipTime.warn { color: #ff8a8a; border-color: rgba(255,107,107,.6); }
+
+/* the forgiven-slip heart next to the cone counter */
+.chip .slipheart { width: 24px; height: 24px; flex: none; margin: -4px -4px -4px -5px; } /* the heart itself is about 14 px */
+.chip .slipheart path { fill: #ff6b6b; stroke: #ffb3b3; stroke-width: 1.2; }
+.chip.slipped .slipheart path { fill: none; stroke: rgba(255,179,179,.45); stroke-width: 1.8; }
+body.isrun .chip .slipheart, body.isstorm .chip .slipheart { display: none; }
+
+/* Storm Shift: stretch and score line, hint shows its cost */
+body.isstorm #runbar { display: flex; justify-content: center; }
+body.isstorm #runbar i { display: none; }
+body.isstorm #stakeN { display: block; min-width: 0; padding: 0 4px; font-size: 11px; background: #e2434b; color: #fff; right: -6px; }
+.card.storm { background: linear-gradient(180deg, rgba(120,190,255,.30), rgba(70,130,210,.22)); border-color: rgba(170,215,255,.4); }
+.card.storm .cmeta { color: #d9efff; }
+
+/* title: one row of three equal level buttons, footer of round toggles */
+.levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.lv { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 84px; padding: 8px 4px; border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.05)); border: 1px solid var(--glassLine); box-shadow: 0 6px 16px rgba(0,0,0,.25); transition: transform .12s, filter .15s; }
+.lv:active { transform: scale(.96); filter: brightness(1.15); }
+.lv b { font-family: var(--display); font-weight: 400; font-size: 23px; line-height: 1; letter-spacing: .5px; }
+.lv small { font-weight: 700; font-size: 11.5px; color: var(--ice2); }
+.lv span { font-weight: 800; font-size: 12.5px; color: var(--ice); display: flex; align-items: center; min-height: 15px; font-variant-numeric: tabular-nums; }
+.lv .mdot { width: 11px; height: 11px; margin-right: 5px; }
+.mdot.none { background: rgba(255,255,255,.12); box-shadow: inset 0 0 0 1.5px rgba(190,225,255,.3); }
+.lv span .mdot.none:only-child { margin-right: 0; }
+.title-foot { flex-wrap: nowrap; align-items: center; gap: 10px; }
+.tog { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.07); border: 1px solid var(--glassLine); flex: none; }
+.tog:active { background: rgba(255,255,255,.16); }
+.tog svg { width: 22px; height: 22px; fill: none; stroke: var(--ice); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tog svg .fillme { fill: var(--ice); stroke: none; }
+.tog .off { display: none; }
+.tog.off { opacity: .55; }
+.tog.off svg .on { display: none; }
+.tog.off svg .off { display: block; stroke: #ff9a8a; }
+@media (max-height: 640px) { .lv { min-height: 68px; } }
+@media (orientation: landscape) and (max-height: 560px) { .lv { min-height: 56px; } .lv small { display: none; } }
+/* title: logo and menu sit together in the middle; the footer stays at the bottom */
+.title-art { margin-top: auto; }
+.menu { flex: none; margin-bottom: auto; padding: 26px 0 10px; }
+
+/* Final pass: landscape phones keep the Storm Shift "Stretch · Score" line, at the foot of the HUD rail */
+@media (orientation: landscape) and (max-height: 560px) {
+  body.isstorm #runbar { display: block !important; position: absolute; left: calc(var(--sal) + 12px); bottom: calc(var(--sab) + 10px); width: 136px;
+    max-width: none; margin: 0; padding: 0; font-size: 12.5px; line-height: 1.35; text-align: left; z-index: 3; }
+}

@@ -80,6 +80,10 @@
     chord: function () { noise(0.14, 2000, 1, 0.2, { slide: 700 }); tone(pent(5), 0.16, 'triangle', 0.14); tone(pent(7), 0.2, 'triangle', 0.1, { delay: 0.05 }); },
     nope: function () { tone(120, 0.14, 'sawtooth', 0.09, { slide: 90 }); },
     press: function () { tone(520, 0.03, 'sine', 0.03); },
+    soft: function () { tone(190, 0.06, 'sine', 0.07, { slide: 150 }); },
+    tick: function (k) { tone(k ? 1180 : 880, 0.05, 'square', 0.045); },
+    slip: function () { tone(150, 0.22, 'sawtooth', 0.1, { slide: 80 }); noise(0.18, 600, 1, 0.16); },
+    sweep: function () { noise(0.6, 900, 0.8, 0.14, { slide: 3200 }); },
     click: function () { tone(660, 0.05, 'triangle', 0.08, { slide: 520 }); },
     hint: function () { tone(pent(5), 0.5, 'sine', 0.14); tone(pent(7), 0.6, 'sine', 0.11, { delay: 0.1 }); },
     hazard: function (k) { // ripple tick

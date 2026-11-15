@@ -34,28 +34,13 @@
   function snowTile(px, v) {
     var c = mk(px), g = c.getContext('2d'), r = E.mulberry32(100 + v * 17);
     if (withImage('snow', c, px)) return c;
-    var gap = px * 0.035, s = px - gap * 2, rad = px * 0.17, bodyH = s - px * 0.045;
-    rr(g, gap, gap + px * 0.045, s, bodyH, rad); g.fillStyle = '#86a3c2'; g.fill();           // under-shadow
-    var gr = g.createLinearGradient(0, gap, 0, gap + bodyH);
-    gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.55, '#e7f2fc'); gr.addColorStop(1, '#c6daef');
-    rr(g, gap, gap, s, bodyH, rad); g.fillStyle = gr; g.fill();
-    g.save(); rr(g, gap, gap, s, bodyH, rad); g.clip();
-    for (var i = 0; i < 4; i++) {
-      var x = gap + r() * s, y = gap + r() * bodyH, rd = px * (0.18 + r() * 0.2);
-      var rg = g.createRadialGradient(x, y, 0, x, y, rd);
-      rg.addColorStop(0, 'rgba(255,255,255,.9)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
-      g.fillStyle = rg; g.fillRect(0, 0, px, px);
-    }
-    var sh = g.createRadialGradient(px * 0.92, px * 0.98, 0, px * 0.92, px * 0.98, px * 0.75);
-    sh.addColorStop(0, 'rgba(110,140,185,.38)'); sh.addColorStop(1, 'rgba(110,140,185,0)');
-    g.fillStyle = sh; g.fillRect(0, 0, px, px);
-    for (i = 0; i < 4; i++) { // sparkle specks
-      g.fillStyle = i % 2 ? 'rgba(255,255,255,.95)' : 'rgba(170,205,240,.8)';
-      g.beginPath(); g.arc(gap + r() * s, gap + r() * bodyH, Math.max(0.6, px * 0.012), 0, TAU); g.fill();
-    }
-    g.restore();
-    g.lineWidth = Math.max(1, px * 0.022); g.strokeStyle = 'rgba(255,255,255,.7)';
-    rr(g, gap + g.lineWidth / 2, gap + g.lineWidth / 2, s - g.lineWidth, bodyH - g.lineWidth, rad); g.stroke();
+    // one calm vertical gradient and a 2 px darker bottom edge: no gloss, no sparkle (hundreds of these sit side by side)
+    var gap = px * 0.035, s = px - gap * 2, rad = px * 0.16, edge = Math.max(2, px * 0.06);
+    rr(g, gap, gap, s, s, rad); g.fillStyle = '#aebfd4'; g.fill();
+    var gr = g.createLinearGradient(0, gap, 0, gap + s - edge);
+    gr.addColorStop(0, '#f3f7fc'); gr.addColorStop(1, '#d9e5f1');
+    rr(g, gap, gap, s, s - edge, rad); g.fillStyle = gr; g.fill();
+    r();
     return c;
   }
 
@@ -70,7 +55,7 @@
     var n = Math.round(px * 0.5);
     for (var i = 0; i < n; i++) {
       var shade = r();
-      g.fillStyle = shade < 0.4 ? 'rgba(20,20,26,.35)' : shade < 0.75 ? 'rgba(120,118,130,.28)' : 'rgba(165,160,172,.22)';
+      g.fillStyle = shade < 0.4 ? 'rgba(20,20,26,.17)' : shade < 0.75 ? 'rgba(120,118,130,.14)' : 'rgba(165,160,172,.11)';
       g.beginPath(); g.ellipse(gap + r() * s, gap + r() * s, px * (0.01 + r() * 0.022), px * (0.008 + r() * 0.016), r() * 3, 0, TAU); g.fill();
     }
     // sunken look: dark inner edge top-left, faint light bottom-right
@@ -80,7 +65,7 @@
     g.beginPath(); g.moveTo(gap + s, gap); g.lineTo(gap + s, gap + s); g.lineTo(gap, gap + s); g.stroke();
     // a little leftover frost in the corners
     for (i = 0; i < 5; i++) { var fx = r() < 0.5 ? gap + r() * s * 0.25 : gap + s - r() * s * 0.25, fy = r() < 0.5 ? gap + r() * s * 0.25 : gap + s - r() * s * 0.25;
-      g.fillStyle = 'rgba(200,228,255,' + (0.1 + r() * 0.16) + ')'; g.beginPath(); g.arc(fx, fy, px * (0.02 + r() * 0.03), 0, TAU); g.fill(); }
+      g.fillStyle = 'rgba(200,228,255,' + (0.05 + r() * 0.08) + ')'; g.beginPath(); g.arc(fx, fy, px * (0.02 + r() * 0.03), 0, TAU); g.fill(); }
     g.restore();
     return c;
   }
@@ -172,11 +157,6 @@
     S.pothole.push(pothole(px, 0), pothole(px, 1));
     S.heave.push(heave(px, 0), heave(px, 1));
     S.cone = cone(px);
-    // snowbank blobs (drawn scaled), so the frame costs a few drawImage calls instead of hundreds of gradients
-    var bs = Math.max(16, px), b1 = mk(bs), g1 = b1.getContext('2d'), gr = g1.createRadialGradient(bs * 0.38, bs * 0.34, 0, bs / 2, bs / 2, bs / 2);
-    gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.7, '#e3effa'); gr.addColorStop(1, '#b4cde4');
-    g1.fillStyle = gr; g1.beginPath(); g1.arc(bs / 2, bs / 2, bs / 2, 0, TAU); g1.fill(); S.blob = b1;
-    var b2 = mk(bs), g2 = b2.getContext('2d'); g2.fillStyle = 'rgba(30,50,80,.55)'; g2.beginPath(); g2.arc(bs / 2, bs / 2, bs / 2, 0, TAU); g2.fill(); S.blobShadow = b2;
     return S;
   }
 
